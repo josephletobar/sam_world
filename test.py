@@ -47,7 +47,9 @@ while True:
     # stepped frame similarity 
     if prev_frame is None:
         prev_frame = frame
-    if frame_count % CHANGE_STEP == 0:
+        run_gpt = True
+        score = None
+    elif frame_count % CHANGE_STEP == 0:
         gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
 
         gray_curr = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -57,7 +59,7 @@ while True:
 
         print(f"DIFFERENCE SCORE: {score}")
 
-        if score > 20:
+        if score > 50:
             run_gpt = True
         else:
             run_gpt = False
