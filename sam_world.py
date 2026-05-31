@@ -4,6 +4,7 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from openai import OpenAI
 import base64
+import random
 from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
 from scripts.frame_dif import frame_dif
@@ -118,6 +119,8 @@ while True:
 
         # NetworkX Graph Update
         G.add_node(node_id)
+
+        if len(G.nodes) > 1: G.add_edge(node_id, random.choice(list(G.nodes)[:-1]))
 
     # Display graph using NetworkX and Matplotlib
     plt.clf()
