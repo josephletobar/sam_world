@@ -1,18 +1,19 @@
+import os
+import json
 from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from openai import OpenAI
 import base64
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
 from scripts.frame_dif import frame_dif
+import networkx as nx
+import matplotlib.pyplot as plt
 
-load_dotenv()
+load_dotenv(override=True)
 
 # LLM Setup
-client = OpenAI(
-    base_url="http://localhost:11434/v1",
-    api_key="ollama"
-)
+client = OpenAI()
 
 # SAM3 Setup
 overrides = dict(
@@ -23,8 +24,21 @@ overrides = dict(
 )
 sam_predictor = SAM3SemanticPredictor(overrides=overrides)
 
+# Graph Display Setup
+plt.ion()
+G = nx.Graph()
+
 # Video Setup
 cap = cv2.VideoCapture("assets/challenge_video.mp4")
+
+# JSON-Based Graph Setup
+GRAPH_PATH = "graph.json"
+graph = {
+    "nodes": [],
+    "edges": []
+}
+with open(GRAPH_PATH, "w") as f:
+    json.dump(graph, f, indent=2)   
 
 frame_count = 0
 
@@ -77,7 +91,38 @@ while True:
         save=False,
         verbose=False
     )
-    annotated = results[0].plot() # Annotate the frame with SAM3 results
+    result = results[0]
+    annotated = result.plot() # Annotate the frame with SAM3 results
+
+    # Add detected labels to graph
+    print(result.names)
+    for box in result.boxes:
+        cls_id = int(box.cls[0])
+        label = result.names[cls_id]
+        node_id = f"{label}_{len(graph['nodes'])}"
+
+        # JSON-Based Graph Update
+        node = {
+            "id": node_id,
+            "label": label
+        }
+        graph["nodes"].append(node)
+
+        with open(GRAPH_PATH, "w") as f:
+            json.dump(graph, f, indent=2)
+
+        # NetworkX Graph Update
+        G.add_node(node_id)
+
+    # Display graph using NetworkX and Matplotlib
+    plt.clf()
+    nx.draw(
+        G,
+        with_labels=True,
+        node_size=500,
+        font_size=8
+    )
+    plt.pause(0.01)
 
     # Display the annotated frame
     cv2.imshow("SAM3 Video", annotated)

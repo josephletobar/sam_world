@@ -2,35 +2,39 @@ import ast
 
 def llm(client, base64_image: str, DEFAULT_LABELS):
 
-    response = client.chat.completions.create(
-        model="qwen2.5vl:3b",
-        messages=[
+    response = client.responses.create(
+        model="gpt-4.1",
+        input=[
             {
                 "role": "user",
                 "content": [
                     {
-                        "type": "text",
+                        "type": "input_text",
                         "text": f"""
-Return ONLY a valid Python list of concise semantic segmentation labels.
+                            Return ONLY a valid Python list of concise semantic segmentation labels.
 
-Rules:
-- Maximum 8 labels
-- Lowercase only
-- No explanation
-- No numbering
-- No sentences
-- Focus on visible robotics-relevant entities and terrain
-- If a label is already present in {DEFAULT_LABELS}, DO NOT repeat it.
+                            Rules:
+                            - Maximum 8 labels
+                            - Lowercase only
+                            - No explanation
+                            - No numbering
+                            - No sentences
+                            - If a label is already present in {DEFAULT_LABELS}, or is a close synonym / near-duplicate of an existing label, DO NOT repeat it
 
-Example:
-["sidewalk", "building", "sign", "person"]
-"""
+                            - Focus on clearly identifiable objects, structures, terrain, hazards, and human-related entities useful for search and rescue robotics
+                            - ONLY include entities directly visible in the provided image
+                            - Prefer concrete physical entities over abstract scene descriptions
+                            - Include obstacles, access points, debris, vehicles, infrastructure, and survivors when visible
+                            - Avoid vague labels like "object", "area", or "environment"
+                            - Prioritize labels that improve navigation, localization, scene understanding, or rescue decision-making
+
+                            Example:
+                            ["sidewalk", "building", "sign", "person"]
+                            """
                     },
                     {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        }
+                        "type": "input_image",
+                        "image_url": f"data:image/jpeg;base64,{base64_image}"
                     }
                 ]
             }
@@ -38,7 +42,7 @@ Example:
     )
 
     sam_labels = ast.literal_eval(
-        response.choices[0].message.content
+        response.output_text
     )
 
     return sam_labels

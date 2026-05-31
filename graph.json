@@ -1,0 +1,41 @@
+{
+  "nodes": [
+    {
+      "id": "sky_0",
+      "label": "sky"
+    },
+    {
+      "id": "road_1",
+      "label": "road"
+    },
+    {
+      "id": "car_2",
+      "label": "car"
+    },
+    {
+      "id": "barrier_3",
+      "label": "barrier"
+    },
+    {
+      "id": "sign_4",
+      "label": "sign"
+    },
+    {
+      "id": "car_5",
+      "label": "car"
+    },
+    {
+      "id": "bridge_6",
+      "label": "bridge"
+    },
+    {
+      "id": "car_7",
+      "label": "car"
+    },
+    {
+      "id": "tree_8",
+      "label": "tree"
+    }
+  ],
+  "edges": []
+}
