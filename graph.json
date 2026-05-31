@@ -21,12 +21,12 @@
       "label": "sign"
     },
     {
-      "id": "car_5",
-      "label": "car"
+      "id": "overpass_5",
+      "label": "overpass"
     },
     {
-      "id": "bridge_6",
-      "label": "bridge"
+      "id": "car_6",
+      "label": "car"
     },
     {
       "id": "car_7",
@@ -35,6 +35,174 @@
     {
       "id": "tree_8",
       "label": "tree"
+    },
+    {
+      "id": "sky_9",
+      "label": "sky"
+    },
+    {
+      "id": "road_10",
+      "label": "road"
+    },
+    {
+      "id": "barrier_11",
+      "label": "barrier"
+    },
+    {
+      "id": "sign_12",
+      "label": "sign"
+    },
+    {
+      "id": "tree_13",
+      "label": "tree"
+    },
+    {
+      "id": "car_14",
+      "label": "car"
+    },
+    {
+      "id": "tree_15",
+      "label": "tree"
+    },
+    {
+      "id": "overpass_16",
+      "label": "overpass"
+    },
+    {
+      "id": "car_17",
+      "label": "car"
+    },
+    {
+      "id": "tree_18",
+      "label": "tree"
+    },
+    {
+      "id": "sky_19",
+      "label": "sky"
+    },
+    {
+      "id": "barrier_20",
+      "label": "barrier"
+    },
+    {
+      "id": "road_21",
+      "label": "road"
+    },
+    {
+      "id": "car_22",
+      "label": "car"
+    },
+    {
+      "id": "sign_23",
+      "label": "sign"
+    },
+    {
+      "id": "overpass_24",
+      "label": "overpass"
+    },
+    {
+      "id": "tree_25",
+      "label": "tree"
+    },
+    {
+      "id": "tree_26",
+      "label": "tree"
+    },
+    {
+      "id": "car_27",
+      "label": "car"
+    },
+    {
+      "id": "sky_28",
+      "label": "sky"
+    },
+    {
+      "id": "barrier_29",
+      "label": "barrier"
+    },
+    {
+      "id": "sign_30",
+      "label": "sign"
+    },
+    {
+      "id": "overpass_31",
+      "label": "overpass"
+    },
+    {
+      "id": "car_32",
+      "label": "car"
+    },
+    {
+      "id": "road_33",
+      "label": "road"
+    },
+    {
+      "id": "tree_34",
+      "label": "tree"
+    },
+    {
+      "id": "car_35",
+      "label": "car"
+    },
+    {
+      "id": "sky_36",
+      "label": "sky"
+    },
+    {
+      "id": "sign_37",
+      "label": "sign"
+    },
+    {
+      "id": "car_38",
+      "label": "car"
+    },
+    {
+      "id": "barrier_39",
+      "label": "barrier"
+    },
+    {
+      "id": "road_40",
+      "label": "road"
+    },
+    {
+      "id": "sign_41",
+      "label": "sign"
+    },
+    {
+      "id": "overpass_42",
+      "label": "overpass"
+    },
+    {
+      "id": "sky_43",
+      "label": "sky"
+    },
+    {
+      "id": "road_44",
+      "label": "road"
+    },
+    {
+      "id": "sign_45",
+      "label": "sign"
+    },
+    {
+      "id": "barrier_46",
+      "label": "barrier"
+    },
+    {
+      "id": "tree_47",
+      "label": "tree"
+    },
+    {
+      "id": "sign_48",
+      "label": "sign"
+    },
+    {
+      "id": "tree_49",
+      "label": "tree"
+    },
+    {
+      "id": "overpass_50",
+      "label": "overpass"
     }
   ],
   "edges": []

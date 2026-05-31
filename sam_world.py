@@ -8,6 +8,8 @@ from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
 from scripts.frame_dif import frame_dif
 import networkx as nx
+import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
 load_dotenv(override=True)
@@ -26,7 +28,10 @@ sam_predictor = SAM3SemanticPredictor(overrides=overrides)
 
 # Graph Display Setup
 plt.ion()
+plt.figure(figsize=(6, 6))
+plt.show(block=False)
 G = nx.Graph()
+pos = {}
 
 # Video Setup
 cap = cv2.VideoCapture("assets/challenge_video.mp4")
@@ -116,13 +121,20 @@ while True:
 
     # Display graph using NetworkX and Matplotlib
     plt.clf()
+    if len(pos) == 0:
+        pos = nx.spring_layout(G)
+    else:
+        pos = nx.spring_layout(G, pos=pos)
     nx.draw(
         G,
+        pos,
         with_labels=True,
         node_size=500,
         font_size=8
     )
     plt.pause(0.01)
+    plt.draw()
+    plt.tight_layout()
 
     # Display the annotated frame
     cv2.imshow("SAM3 Video", annotated)
