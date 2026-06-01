@@ -135,9 +135,9 @@ while True:
         node_size=500,
         font_size=8
     )
-    plt.pause(0.01)
+    plt.pause(0.1)
     plt.draw()
-    plt.tight_layout()
+    # plt.tight_layout()
 
     # Display the annotated frame
     cv2.imshow("SAM3 Video", annotated)

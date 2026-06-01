@@ -75,6 +75,74 @@
     {
       "id": "tree_18",
       "label": "tree"
+    },
+    {
+      "id": "sky_19",
+      "label": "sky"
+    },
+    {
+      "id": "barrier_20",
+      "label": "barrier"
+    },
+    {
+      "id": "road_21",
+      "label": "road"
+    },
+    {
+      "id": "car_22",
+      "label": "car"
+    },
+    {
+      "id": "sign_23",
+      "label": "sign"
+    },
+    {
+      "id": "overpass_24",
+      "label": "overpass"
+    },
+    {
+      "id": "tree_25",
+      "label": "tree"
+    },
+    {
+      "id": "tree_26",
+      "label": "tree"
+    },
+    {
+      "id": "car_27",
+      "label": "car"
+    },
+    {
+      "id": "sky_28",
+      "label": "sky"
+    },
+    {
+      "id": "barrier_29",
+      "label": "barrier"
+    },
+    {
+      "id": "sign_30",
+      "label": "sign"
+    },
+    {
+      "id": "overpass_31",
+      "label": "overpass"
+    },
+    {
+      "id": "car_32",
+      "label": "car"
+    },
+    {
+      "id": "road_33",
+      "label": "road"
+    },
+    {
+      "id": "tree_34",
+      "label": "tree"
+    },
+    {
+      "id": "car_35",
+      "label": "car"
     }
   ],
   "edges": []
