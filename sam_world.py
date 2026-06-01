@@ -5,10 +5,13 @@ import cv2
 from openai import OpenAI
 import base64
 import random
+import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
 from scripts.frame_dif import frame_dif
+from scripts.clip_embedding import embed
 import networkx as nx
+from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -46,10 +49,24 @@ graph = {
 with open(GRAPH_PATH, "w") as f:
     json.dump(graph, f, indent=2)   
 
+
+embedding_matrix = []
+metadata = []
+def add_node(node, embedding, node_id):
+    graph["nodes"].append(node)
+    embedding_matrix.append(embedding)
+    metadata.append(node_id)
+    G.add_node(node_id)
+    if len(G.nodes) > 1: G.add_edge(node_id, random.choice(list(G.nodes)[:-1]))
+    print("NEW OBJECT !!!!!!!!!!!!!!!!!!!!!!!")
+
+
 frame_count = 0
 
 SAM_STEP = 5
 CHANGE_STEP = 5
+
+SIM_THRESHOLD = .8
 
 DEFAULT_LABELS = ["road", "car", "tree"]
 
@@ -101,26 +118,43 @@ while True:
     annotated = result.plot() # Annotate the frame with SAM3 results
 
     # Add detected labels to graph
-    print(result.names)
-    for box in result.boxes:
+    for i, box in enumerate(result.boxes):
         cls_id = int(box.cls[0])
         label = result.names[cls_id]
         node_id = f"{label}_{len(graph['nodes'])}"
 
+        mask = result.masks.data[i]
+        embedding = embed(frame, mask)
+
         # JSON-Based Graph Update
         node = {
             "id": node_id,
-            "label": label
+            "label": label,
+            "embedding": embedding,
         }
-        graph["nodes"].append(node)
+
+        if len(embedding_matrix) > 0:
+            sims = cosine_similarity(
+                [embedding],
+                embedding_matrix
+            )[0]
+            best_sim = sims.max()
+
+            print(best_sim)
+
+            if best_sim < SIM_THRESHOLD:
+                add_node(node, embedding, node_id)
+            else: 
+                # merging logic
+                pass
+        else:
+            add_node(node, embedding, node_id)
 
         with open(GRAPH_PATH, "w") as f:
             json.dump(graph, f, indent=2)
 
         # NetworkX Graph Update
-        G.add_node(node_id)
-
-        if len(G.nodes) > 1: G.add_edge(node_id, random.choice(list(G.nodes)[:-1]))
+        
 
     # Display graph using NetworkX and Matplotlib
     plt.clf()
