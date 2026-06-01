@@ -52,13 +52,17 @@ with open(GRAPH_PATH, "w") as f:
 
 embedding_matrix = []
 metadata = []
-def add_node(node, embedding, node_id):
+img_mem = []
+def add_node(node, embedding, node_id, img):
     graph["nodes"].append(node)
     embedding_matrix.append(embedding)
     metadata.append(node_id)
+    img_mem.append(img)
     G.add_node(node_id)
     if len(G.nodes) > 1: G.add_edge(node_id, random.choice(list(G.nodes)[:-1]))
     print("NEW OBJECT !!!!!!!!!!!!!!!!!!!!!!!")
+
+    
 
 
 frame_count = 0
@@ -66,7 +70,7 @@ frame_count = 0
 SAM_STEP = 5
 CHANGE_STEP = 5
 
-SIM_THRESHOLD = .8
+SIM_THRESHOLD = 0.9
 
 DEFAULT_LABELS = ["road", "car", "tree"]
 
@@ -126,6 +130,15 @@ while True:
         mask = result.masks.data[i]
         embedding = embed(frame, mask)
 
+        mask = mask.cpu().numpy()
+        segmented = frame.copy()
+        segmented[mask == 0] = 0
+        ys, xs = np.where(mask > 0.5)
+        segmented = segmented[
+            ys.min():ys.max(),
+            xs.min():xs.max()
+        ]
+
         # JSON-Based Graph Update
         node = {
             "id": node_id,
@@ -139,16 +152,26 @@ while True:
                 embedding_matrix
             )[0]
             best_sim = sims.max()
-
-            print(best_sim)
+            best_idx = sims.argmax()
 
             if best_sim < SIM_THRESHOLD:
-                add_node(node, embedding, node_id)
+                add_node(node, embedding, node_id, segmented)
             else: 
-                # merging logic
+                # Merge Nodes
+
+                # # debug to visualize the matched objects
+                # print(sims[best_idx] == best_sim)
+                # print(best_sim)
+                # cv2.imshow("match1", segmented)
+                # cv2.imshow("match2", img_mem[best_idx])
+                # print(best_sim)
+                # cv2.waitKey(0)
+                # cv2.destroyAllWindows()
+
                 pass
         else:
-            add_node(node, embedding, node_id)
+            add_node(node, embedding, node_id, segmented)
+            
 
         with open(GRAPH_PATH, "w") as f:
             json.dump(graph, f, indent=2)
