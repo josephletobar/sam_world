@@ -139,19 +139,23 @@ class SamWorld:
 
         self.G.add_node(node_id)
 
-        if len(self.G.nodes) > 1:
-
-            other_nodes = [
-                n for n in self.G.nodes
-                if n != node_id
-            ]
-
-            self.G.add_edge(
-                node_id,
-                random.choice(other_nodes)
-            )
-
         print("NEW OBJECT !!!!!!!!!!!!!!!!!!!!!!!")
+
+        for other_id, other_pos in zip(
+            self.node_ids,
+            self.object_poses
+        ):
+            if node_id != other_id: 
+                dist = np.linalg.norm(
+                    np.array(object_pos) -
+                    np.array(other_pos)
+                )
+
+                self.G.add_edge(
+                    node_id,
+                    other_id,
+                    weight=dist
+                )
 
     def frame_dif(self, frame):
 
@@ -405,8 +409,10 @@ class SamWorld:
                 pos=self.pos
             )
 
+        mst = nx.minimum_spanning_tree(self.G, weight="weight")
+
         nx.draw(
-            self.G,
+            mst,
             self.pos,
             with_labels=True,
             node_size=500,
@@ -439,8 +445,11 @@ class SamWorld:
         # Display the annotated frame
         cv2.imshow("SAM3 Video", annotated)
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            return False
+        cv2.waitKey(0)
+        cv2.destroyWindow("SAM3 Video")
+
+        # if cv2.waitKey(1) & 0xFF == ord("q"):
+        #     return False
 
         return True
 
