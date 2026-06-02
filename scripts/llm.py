@@ -22,6 +22,9 @@ def llm(client, base64_image: str, DEFAULT_LABELS):
                             - If a label is already present in {DEFAULT_LABELS}, or is a close synonym / near-duplicate of an existing label, DO NOT repeat it
 
                             - Focus on clearly identifiable objects, structures, terrain, hazards, and human-related entities useful for search and rescue robotics
+                            - Prefer discrete, distinguishable entities that can be individually localized or tracked
+                            - Avoid broad background regions or generic structural surfaces unless they are mission-relevant obstacles or landmarks
+                            - Do NOT include generic surfaces like "wall", "floor", "ceiling", or "room" unless uniquely important to navigation or hazard assessment
                             - ONLY include entities directly visible in the provided image
                             - Prefer concrete physical entities over abstract scene descriptions
                             - Include obstacles, access points, debris, vehicles, infrastructure, and survivors when visible
