@@ -112,6 +112,8 @@ class SamWorld:
         self.node_ids = []
         self.embedding_matrix = [] # img embeddings
         self.segmented_rgbs = [] # rgb images
+        self.object_poses = [] 
+
         self.segmented_depths = [] # depth channel
         self.poses = [] # depth channel
 
@@ -122,8 +124,7 @@ class SamWorld:
         embedding,
         node_id,
         img,
-        depth = None,
-        pose = None
+        object_pos = None,
     ):
 
         self.graph["nodes"].append(node)
@@ -132,10 +133,9 @@ class SamWorld:
         self.node_ids.append(node_id)
         self.segmented_rgbs.append(img)
 
-        if depth is not None:
-            self.segmented_depths.append(depth)
-        if pose is not None:
-            self.poses.append(pose)
+        if object_pos is not None:
+            self.object_poses.append(object_pos)
+
 
         self.G.add_node(node_id)
 
@@ -169,7 +169,7 @@ class SamWorld:
         else:
             run_gpt = False
 
-        return run_gpt
+        return False
 
     def get_next_frame(self):
 
@@ -262,7 +262,9 @@ class SamWorld:
         annotated = result.plot()
 
         # Add detected labels to graph
+        object_poses_buf = []
         for i, box in enumerate(result.boxes):
+            # Results object
             cls_id = int(box.cls[0])
             label = result.names[cls_id]
             node_id = (
@@ -272,14 +274,55 @@ class SamWorld:
             mask = result.masks.data[i]
             mask = mask.cpu().numpy()
 
+            # Find objects position
             ys, xs = np.where(mask > 0.5)
 
             segmented_depth = slam_dict["depth"].copy()
             segmented_depth[mask == 0] = 0
-            segmented_depth = segmented_depth[
-                ys.min():ys.max(),
-                xs.min():xs.max()
-            ]
+
+            ys, xs = np.where(mask > 0.5)
+            cx = xs.mean()
+            cy = ys.mean()
+            dists = (xs - cx)**2 + (ys - cy)**2
+            best_idx = np.argmin(dists)
+            cx = xs[best_idx]
+            cy = ys[best_idx]
+
+            depth_values = segmented_depth[:, :, 0]
+
+            depth_value = depth_values[
+                depth_values > 0
+            ].mean()
+
+            cv2.imshow("DEPTH", slam_dict["depth"])
+            cv2.waitKey(0)
+            cv2.destroyWindow("DEPTH")
+
+            # distance from center
+            img_h, img_w = frame.shape[:2]
+            dx = (cx - img_w / 2) / (img_w / 2)
+            dy = (cy - img_h / 2) / (img_h / 2)
+            local_x = dx * depth_value
+            local_y = dy * depth_value
+            local_z = depth_value
+
+            world_x = slam_dict["pose"]["tx"] + local_x
+            world_y = slam_dict["pose"]["tx"] + local_y
+            world_z = slam_dict["pose"]["tz"] + local_z
+
+            object_pos = (
+                world_x,
+                world_y,
+                world_z
+            )
+
+            object_poses_buf.append(((cx, cy), object_pos))
+
+            # dont tight crop
+            # segmented_depth = segmented_depth[
+            #     ys.min():ys.max(),
+            #     xs.min():xs.max()
+            # ]
 
             segmented_rgb = frame.copy()
             segmented_rgb[mask == 0] = 0
@@ -299,12 +342,13 @@ class SamWorld:
             }
 
             # Node/Object Association
-            new_data = (node_id, embedding, segmented_rgb, segmented_depth if slam_dict else None, slam_dict["pose"] if slam_dict else None)
-            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.segmented_depths if slam_dict else None, self.poses if slam_dict else None)
+            new_data = (node_id, embedding, segmented_rgb, self.object_poses if slam_dict else None)
+            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.object_poses  if slam_dict else None)
 
             if len(self.embedding_matrix) > 0:
 
-                best_prob, best_id, best_idx = association(new_data, all_data)
+                # best_prob, best_id, best_idx = association(new_data, all_data)
+                best_prob = 0
         
                 # New Node
                 if best_prob < self.SIM_THRESHOLD:
@@ -313,8 +357,7 @@ class SamWorld:
                         embedding,
                         node_id,
                         segmented_rgb,
-                        segmented_depth if slam_dict else None,
-                        slam_dict["pose"] if slam_dict else None
+                        object_pos if slam_dict else None
                     )
                 # Existing Node
                 else:
@@ -335,8 +378,7 @@ class SamWorld:
                     embedding,
                     node_id,
                     segmented_rgb,
-                    segmented_depth if slam_dict else None,
-                    slam_dict["pose"] if slam_dict else None
+                    object_pos if slam_dict else None
                 )
 
             with open(self.GRAPH_PATH, "w") as f:
@@ -368,8 +410,28 @@ class SamWorld:
             font_size=8
         )
 
-        plt.pause(0.1)
-        plt.draw()
+        # plt.pause(0.1)
+        # plt.draw()
+
+        for ((cx, cy), object_pos) in object_poses_buf:
+
+            world_x, world_y, world_z = object_pos
+            cv2.circle(
+                annotated,
+                (int(cx), int(cy)),
+                5,
+                (0, 0, 0),
+                -1
+            )
+            cv2.putText(
+                annotated,
+                f"{world_x:.2f}, {world_y:.2f}, {world_z:.2f}",
+                (int(cx), int(cy) - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 0, 0),
+                2
+            )
 
         # Display the annotated frame
         cv2.imshow("SAM3 Video", annotated)
@@ -384,8 +446,7 @@ if __name__ == "__main__":
 
     # world = SamWorld("assets/challenge_video.mp4")
     world = SamWorld(
-        r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam"
-    )
+r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"    )
 
     while True:
 
