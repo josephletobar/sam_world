@@ -9,6 +9,7 @@ import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
 from scripts.clip_embedding import embed
+from scripts.association import association
 import networkx as nx
 from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib
@@ -107,24 +108,34 @@ class SamWorld:
         self.prev_frame = None
         self.sam_labels = []
 
-        self.embedding_matrix = []
-        self.metadata = []
-        
-        self.img_mem = []
+        # In memory storage (index alligned)
+        self.node_ids = []
+        self.embedding_matrix = [] # img embeddings
+        self.segmented_rgbs = [] # rgb images
+        self.segmented_depths = [] # depth channel
+        self.poses = [] # depth channel
 
+    # Adds to Graph and updates memories
     def add_node(
         self,
         node,
         embedding,
         node_id,
-        img
+        img,
+        depth = None,
+        pose = None
     ):
 
         self.graph["nodes"].append(node)
 
         self.embedding_matrix.append(embedding)
-        self.metadata.append(node_id)
-        self.img_mem.append(img)
+        self.node_ids.append(node_id)
+        self.segmented_rgbs.append(img)
+
+        if depth is not None:
+            self.segmented_depths.append(depth)
+        if pose is not None:
+            self.poses.append(pose)
 
         self.G.add_node(node_id)
 
@@ -151,7 +162,7 @@ class SamWorld:
         diff = cv2.absdiff(gray_curr, gray_prev)
         score = diff.mean()
 
-        print(f"DIFFERENCE SCORE: {score}")
+        # print(f"DIFFERENCE SCORE: {score}")
 
         if score > self.DIFF_TRESHOLD:
             run_gpt = True
@@ -177,6 +188,10 @@ class SamWorld:
             )
             depth_frame = cv2.imread(
                 self.depth_files[self.frame_idx]
+            )
+            depth_frame = cv2.resize(
+                depth_frame,
+                (640, 360)
             )
             pose = self.pose_data[self.frame_idx]
 
@@ -206,37 +221,29 @@ class SamWorld:
 
         # Stepped Frame Differencing Logic
         if self.prev_frame is None:
-
             self.prev_frame = frame
             self.run_gpt = True
             score = None
 
         elif self.frame_count % self.CHANGE_STEP == 0:
-
             self.run_gpt = self.frame_dif(frame)
 
         # Prepare image for LLM
         frame = cv2.resize(frame, (640, 360))
-
         _, buffer = cv2.imencode(".jpg", frame)
-
         base64_image = base64.b64encode(
             buffer
         ).decode("utf-8")
 
         # Run LLM if significant change detected or first frame
         if self.run_gpt:
-
             print("--- LLM RUNNING ---")
-
             self.sam_labels = llm(
                 self.client,
                 base64_image,
                 self.DEFAULT_LABELS
             )
-
             print(self.sam_labels)
-
         full_labels = (
             self.DEFAULT_LABELS +
             self.sam_labels
@@ -252,36 +259,37 @@ class SamWorld:
         )
 
         result = results[0]
-
         annotated = result.plot()
 
         # Add detected labels to graph
         for i, box in enumerate(result.boxes):
-
             cls_id = int(box.cls[0])
-
             label = result.names[cls_id]
-
             node_id = (
                 f"{label}_{len(self.graph['nodes'])}"
             )
 
             mask = result.masks.data[i]
-
-            embedding = embed(frame, mask)
-
             mask = mask.cpu().numpy()
-
-            segmented = frame.copy()
-
-            segmented[mask == 0] = 0
 
             ys, xs = np.where(mask > 0.5)
 
-            segmented = segmented[
+            segmented_depth = slam_dict["depth"].copy()
+            segmented_depth[mask == 0] = 0
+            segmented_depth = segmented_depth[
                 ys.min():ys.max(),
                 xs.min():xs.max()
             ]
+
+            segmented_rgb = frame.copy()
+            segmented_rgb[mask == 0] = 0
+            segmented_rgb = segmented_rgb[
+                ys.min():ys.max(),
+                xs.min():xs.max()
+            ]
+
+            embedding = embed(segmented_rgb)
+
 
             # JSON-Based Graph Update
             node = {
@@ -290,48 +298,45 @@ class SamWorld:
                 "embedding": embedding,
             }
 
+            # Node/Object Association
+            new_data = (node_id, embedding, segmented_rgb, segmented_depth if slam_dict else None, slam_dict["pose"] if slam_dict else None)
+            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.segmented_depths if slam_dict else None, self.poses if slam_dict else None)
+
             if len(self.embedding_matrix) > 0:
 
-                sims = cosine_similarity(
-                    [embedding],
-                    self.embedding_matrix
-                )[0]
-
-                best_sim = sims.max()
-
-                best_idx = sims.argmax()
-
-                if best_sim < self.SIM_THRESHOLD:
-
+                best_prob, best_id, best_idx = association(new_data, all_data)
+        
+                # New Node
+                if best_prob < self.SIM_THRESHOLD:
                     self.add_node(
                         node,
                         embedding,
                         node_id,
-                        segmented
+                        segmented_rgb,
+                        segmented_depth if slam_dict else None,
+                        slam_dict["pose"] if slam_dict else None
                     )
-
+                # Existing Node
                 else:
-
                     # Merge Nodes
 
                     # # debug to visualize the matched objects
-                    # print(sims[best_idx] == best_sim)
-                    # print(best_sim)
+                    # print(best_prob)
                     # cv2.imshow("match1", segmented)
-                    # cv2.imshow("match2", img_mem[best_idx])
-                    # print(best_sim)
+                    # cv2.imshow("match2", self.segmented_rgbs[best_idx])
                     # cv2.waitKey(0)
                     # cv2.destroyAllWindows()
-
                     pass
 
+            # First Node
             else:
-
                 self.add_node(
                     node,
                     embedding,
                     node_id,
-                    segmented
+                    segmented_rgb,
+                    segmented_depth if slam_dict else None,
+                    slam_dict["pose"] if slam_dict else None
                 )
 
             with open(self.GRAPH_PATH, "w") as f:
