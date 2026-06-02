@@ -94,7 +94,7 @@ class SamWorld:
         # Set Constants/Thresholds
         self.SAM_STEP = 5
         self.CHANGE_STEP = 5
-        self.SIM_THRESHOLD = 0.9
+        self.SIM_THRESHOLD = 0.8
         self.DIFF_TRESHOLD = 0.8
 
         self.DEFAULT_LABELS = [
@@ -294,20 +294,20 @@ class SamWorld:
                 depth_values > 0
             ].mean()
 
-            cv2.imshow("DEPTH", slam_dict["depth"])
-            cv2.waitKey(0)
-            cv2.destroyWindow("DEPTH")
+            # cv2.imshow("DEPTH", slam_dict["depth"])
+            # cv2.waitKey(0)
+            # cv2.destroyWindow("DEPTH")
 
             # distance from center
             img_h, img_w = frame.shape[:2]
             dx = (cx - img_w / 2) / (img_w / 2)
-            dy = (cy - img_h / 2) / (img_h / 2)
+            dy = (img_h / 2 - cy) / (img_h / 2)
             local_x = dx * depth_value
             local_y = dy * depth_value
             local_z = depth_value
 
             world_x = slam_dict["pose"]["tx"] + local_x
-            world_y = slam_dict["pose"]["tx"] + local_y
+            world_y = slam_dict["pose"]["ty"] + local_y
             world_z = slam_dict["pose"]["tz"] + local_z
 
             object_pos = (
@@ -342,13 +342,12 @@ class SamWorld:
             }
 
             # Node/Object Association
-            new_data = (node_id, embedding, segmented_rgb, self.object_poses if slam_dict else None)
-            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.object_poses  if slam_dict else None)
+            new_data = (node_id, embedding, segmented_rgb, object_pos if slam_dict else None)
+            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.object_poses if slam_dict else None)
 
             if len(self.embedding_matrix) > 0:
 
-                # best_prob, best_id, best_idx = association(new_data, all_data)
-                best_prob = 0
+                best_prob, best_id, best_idx = association(new_data, all_data)
         
                 # New Node
                 if best_prob < self.SIM_THRESHOLD:
@@ -359,8 +358,12 @@ class SamWorld:
                         segmented_rgb,
                         object_pos if slam_dict else None
                     )
-                # Existing Node
-                else:
+
+                    # cv2.imshow("NEWOBJECT", segmented_rgb)
+                    # cv2.waitKey(0)
+                    # cv2.destroyWindow("NEWOBJECT")
+                
+                else: # Existing Node
                     # Merge Nodes
 
                     # # debug to visualize the matched objects
@@ -410,8 +413,8 @@ class SamWorld:
             font_size=8
         )
 
-        # plt.pause(0.1)
-        # plt.draw()
+        plt.pause(0.1)
+        plt.draw()
 
         for ((cx, cy), object_pos) in object_poses_buf:
 
