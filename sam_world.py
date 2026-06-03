@@ -8,6 +8,7 @@ import random
 import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
+from scripts.get_obj_pos import get_pos
 from scripts.clip_embedding import embed
 from scripts.association import association
 import networkx as nx
@@ -96,7 +97,7 @@ class SamWorld:
         self.SAM_STEP = 5
         self.CHANGE_STEP = 5
         self.SIM_THRESHOLD = 0.8
-        self.DIFF_TRESHOLD = 0.8
+        self.DIFF_TRESHOLD = 0.75
 
         self.DEFAULT_LABELS = [
             "road",
@@ -113,20 +114,21 @@ class SamWorld:
         self.node_ids = []
         self.embedding_matrix = [] # img embeddings
         self.segmented_rgbs = [] # rgb images
-        self.object_poses = [] 
+        self.world_poses = [] 
 
         self.segmented_depths = [] # depth channel
         self.poses = [] # depth channel
 
     # Adds to Graph and updates memories
-    def add_node(
+    def add_object(
         self,
         node,
         embedding,
         node_id,
         img,
-        object_pos = None,
+        world_pos = None,
     ):
+        SCALE = 5000
 
         self.graph["nodes"].append(node)
 
@@ -134,21 +136,28 @@ class SamWorld:
         self.node_ids.append(node_id)
         self.segmented_rgbs.append(img)
 
-        if object_pos is not None:
-            self.object_poses.append(object_pos)
+        if world_pos is not None:
+            self.world_poses.append(world_pos)
+
+        world_x, world_y, world_z = world_pos
 
 
         self.G.add_node(node_id)
+
+        self.pos[node_id] = (
+            world_x,
+            world_z
+        )
 
         print("NEW OBJECT !!!!!!!!!!!!!!!!!!!!!!!")
 
         for other_id, other_pos in zip(
             self.node_ids,
-            self.object_poses
+            self.world_poses
         ):
             if node_id != other_id: 
                 dist = np.linalg.norm(
-                    np.array(object_pos) -
+                    np.array(world_pos) -
                     np.array(other_pos)
                 )
 
@@ -214,6 +223,9 @@ class SamWorld:
     def run(self):
 
         ret, frame, slam_dict = self.get_next_frame()
+
+        pose = slam_dict["pose"]
+        depth = slam_dict["depth"]
 
         if not ret:
             return False
@@ -282,46 +294,12 @@ class SamWorld:
             # Find objects position
             ys, xs = np.where(mask > 0.5)
 
-            segmented_depth = slam_dict["depth"].copy()
-            segmented_depth[mask == 0] = 0
+            object_pose = get_pos(mask, depth, pose)
+            if object_pose is None: continue
 
-            ys, xs = np.where(mask > 0.5)
-            cx = xs.mean()
-            cy = ys.mean()
-            dists = (xs - cx)**2 + (ys - cy)**2
-            best_idx = np.argmin(dists)
-            cx = xs[best_idx]
-            cy = ys[best_idx]
+            world_pos, image_pos = object_pose
 
-            depth_values = segmented_depth[:, :, 0]
-
-            depth_value = depth_values[
-                depth_values > 0
-            ].mean()
-
-            # cv2.imshow("DEPTH", slam_dict["depth"])
-            # cv2.waitKey(0)
-            # cv2.destroyWindow("DEPTH")
-
-            # distance from center
-            img_h, img_w = frame.shape[:2]
-            dx = (cx - img_w / 2) / (img_w / 2)
-            dy = (img_h / 2 - cy) / (img_h / 2)
-            local_x = dx * depth_value
-            local_y = dy * depth_value
-            local_z = depth_value
-
-            world_x = slam_dict["pose"]["tx"] + local_x
-            world_y = slam_dict["pose"]["ty"] + local_y
-            world_z = slam_dict["pose"]["tz"] + local_z
-
-            object_pos = (
-                world_x,
-                world_y,
-                world_z
-            )
-
-            object_poses_buf.append(((cx, cy), object_pos))
+            object_poses_buf.append((image_pos, world_pos))
 
             # dont tight crop
             # segmented_depth = segmented_depth[
@@ -347,21 +325,24 @@ class SamWorld:
             }
 
             # Node/Object Association
-            new_data = (node_id, embedding, segmented_rgb, object_pos if slam_dict else None)
-            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.object_poses if slam_dict else None)
+            new_data = (node_id, embedding, segmented_rgb, world_pos if slam_dict else None)
+            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.world_poses if slam_dict else None)
 
             if len(self.embedding_matrix) > 0:
 
                 best_prob, best_id, best_idx = association(new_data, all_data)
         
                 # New Node
+                print("-------")
+                print(best_prob)
+                print("-------")
                 if best_prob < self.SIM_THRESHOLD:
-                    self.add_node(
+                    self.add_object(
                         node,
                         embedding,
                         node_id,
                         segmented_rgb,
-                        object_pos if slam_dict else None
+                        world_pos if slam_dict else None
                     )
 
                     # cv2.imshow("NEWOBJECT", segmented_rgb)
@@ -381,12 +362,12 @@ class SamWorld:
 
             # First Node
             else:
-                self.add_node(
+                self.add_object(
                     node,
                     embedding,
                     node_id,
                     segmented_rgb,
-                    object_pos if slam_dict else None
+                    world_pos if slam_dict else None
                 )
 
             with open(self.GRAPH_PATH, "w") as f:
@@ -396,36 +377,27 @@ class SamWorld:
                     indent=2
                 )
 
-        # # Display graph using NetworkX and Matplotlib
-        # plt.clf()
+        # Display graph using NetworkX and Matplotlib
+        plt.clf()
 
-        # if len(self.pos) == 0:
+        mst = nx.minimum_spanning_tree(self.G, weight="weight")
 
-        #     self.pos = nx.spring_layout(self.G)
+        edge_labels = nx.get_edge_attributes(mst, "weight")
 
-        # else:
+        nx.draw(mst, self.pos, with_labels=True, node_size=1000)
 
-        #     self.pos = nx.spring_layout(
-        #         self.G,
-        #         pos=self.pos
-        #     )
+        nx.draw_networkx_edge_labels(
+            mst,
+            self.pos,
+            edge_labels=edge_labels
+        )
 
-        # mst = nx.minimum_spanning_tree(self.G, weight="weight")
+        plt.pause(0.1)
+        plt.draw()
 
-        # nx.draw(
-        #     mst,
-        #     self.pos,
-        #     with_labels=True,
-        #     node_size=500,
-        #     font_size=8
-        # )
+        for ((cx, cy), world_pos) in object_poses_buf:
 
-        # plt.pause(0.1)
-        # plt.draw()
-
-        for ((cx, cy), object_pos) in object_poses_buf:
-
-            world_x, world_y, world_z = object_pos
+            world_x, world_y, world_z = world_pos
             cv2.circle(
                 annotated,
                 (int(cx), int(cy)),
@@ -466,7 +438,7 @@ if __name__ == "__main__":
 
     # world = SamWorld("assets/challenge_video.mp4")
     world = SamWorld(
-        "C:/Users/jleto/Downloads/rgbd_dataset_freiburg1_xyz/rgbd_dataset_freiburg1_xyz"
+        r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"
     )
 
     try:
@@ -478,22 +450,24 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Saving graph...")
 
+    except Exception as e:
+        print(e)
+
     finally:
         mst = nx.minimum_spanning_tree(world.G, weight="weight")
         nx.write_graphml(mst, "graph.graphml")
 
         print("Graph saved.")
 
-
-        pos = nx.kamada_kawai_layout(mst, weight="weight")
+        # pos = nx.kamada_kawai_layout(mst, weight="weight")
 
         edge_labels = nx.get_edge_attributes(mst, "weight")
 
-        nx.draw(mst, pos, with_labels=True, node_size=1000)
+        nx.draw(mst, world.pos, with_labels=True, node_size=1000)
 
         nx.draw_networkx_edge_labels(
             mst,
-            pos,
+            world.pos,
             edge_labels=edge_labels
         )
 

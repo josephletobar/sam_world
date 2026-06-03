@@ -8,32 +8,36 @@
     <node id="book_3" />
     <node id="monitor_4" />
     <node id="book_5" />
-    <node id="cup_6" />
-    <node id="monitor_7" />
-    <node id="book_8" />
-    <edge source="keyboard_0" target="cup_6">
-      <data key="d0">10</data>
+    <node id="mouse_6" />
+    <node id="cup_7" />
+    <node id="telephone_8" />
+    <node id="mouse_9" />
+    <edge source="keyboard_0" target="monitor_4">
+      <data key="d0">5</data>
     </edge>
-    <edge source="chair_1" target="book_8">
-      <data key="d0">31</data>
+    <edge source="keyboard_0" target="cup_7">
+      <data key="d0">5</data>
     </edge>
-    <edge source="person_2" target="monitor_7">
-      <data key="d0">26</data>
+    <edge source="keyboard_0" target="mouse_6">
+      <data key="d0">6</data>
+    </edge>
+    <edge source="chair_1" target="person_2">
+      <data key="d0">21</data>
+    </edge>
+    <edge source="person_2" target="mouse_9">
+      <data key="d0">17</data>
     </edge>
     <edge source="book_3" target="book_5">
-      <data key="d0">10</data>
+      <data key="d0">5</data>
     </edge>
-    <edge source="book_3" target="cup_6">
-      <data key="d0">18</data>
+    <edge source="book_3" target="telephone_8">
+      <data key="d0">5</data>
     </edge>
-    <edge source="monitor_4" target="cup_6">
-      <data key="d0">13</data>
+    <edge source="cup_7" target="telephone_8">
+      <data key="d0">6</data>
     </edge>
-    <edge source="monitor_4" target="monitor_7">
-      <data key="d0">14</data>
-    </edge>
-    <edge source="book_5" target="book_8">
-      <data key="d0">10</data>
+    <edge source="telephone_8" target="mouse_9">
+      <data key="d0">7</data>
     </edge>
   </graph>
 </graphml>
