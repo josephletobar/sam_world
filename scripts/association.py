@@ -37,14 +37,15 @@ def association(new_data, all_data):
 
     best_node_id = node_ids[best_idx]
 
-    # print("\n========== BEST MATCH DEBUG ==========")
-    # print(f"CURR NODE:  {node_id}")
-    # print(f"BEST NODE:  {best_node_id}")
-    # print("CURRENT:", curr_pose)
-    # print("MATCHED:", poses_np[best_idx])
-    # print(f"CLIP:  {cosine_sims[best_idx]:.4f}")
-    # print(f"POSE:  {pose_scores[best_idx]:.4f}")
-    # print(f"FINAL: {best_prob:.4f}")
+    if best_prob > 0.8:
+        print("\n========== BEST MATCH DEBUG ==========")
+        print(f"CURR NODE:  {node_id}")
+        print(f"BEST NODE:  {best_node_id}")
+        print("CURRENT:", curr_pose)
+        print("MATCHED:", poses_np[best_idx])
+        print(f"CLIP:  {cosine_sims[best_idx]:.4f}")
+        print(f"POSE:  {pose_scores[best_idx]:.4f}")
+        print(f"FINAL: {best_prob:.4f}")
 
     # match_img = cv2.resize(
     #     segmented_objs[best_idx],

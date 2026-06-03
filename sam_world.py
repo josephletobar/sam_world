@@ -12,6 +12,7 @@ from scripts.clip_embedding import embed
 from scripts.association import association
 import networkx as nx
 from sklearn.metrics.pairwise import cosine_similarity
+from networkx.drawing.nx_pydot import graphviz_layout
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -73,9 +74,9 @@ class SamWorld:
         self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
 
         # Graph Display Setup
-        plt.ion()
-        plt.figure(figsize=(6, 6))
-        plt.show(block=False)
+        # plt.ion()
+        # plt.figure(figsize=(6, 6))
+        # plt.show(block=False)
         self.G = nx.Graph()
         self.pos = {}
 
@@ -154,7 +155,7 @@ class SamWorld:
                 self.G.add_edge(
                     node_id,
                     other_id,
-                    weight=dist
+                    weight=int(dist)
                 )
 
     def frame_dif(self, frame):
@@ -395,32 +396,32 @@ class SamWorld:
                     indent=2
                 )
 
-        # Display graph using NetworkX and Matplotlib
-        plt.clf()
+        # # Display graph using NetworkX and Matplotlib
+        # plt.clf()
 
-        if len(self.pos) == 0:
+        # if len(self.pos) == 0:
 
-            self.pos = nx.spring_layout(self.G)
+        #     self.pos = nx.spring_layout(self.G)
 
-        else:
+        # else:
 
-            self.pos = nx.spring_layout(
-                self.G,
-                pos=self.pos
-            )
+        #     self.pos = nx.spring_layout(
+        #         self.G,
+        #         pos=self.pos
+        #     )
 
-        mst = nx.minimum_spanning_tree(self.G, weight="weight")
+        # mst = nx.minimum_spanning_tree(self.G, weight="weight")
 
-        nx.draw(
-            mst,
-            self.pos,
-            with_labels=True,
-            node_size=500,
-            font_size=8
-        )
+        # nx.draw(
+        #     mst,
+        #     self.pos,
+        #     with_labels=True,
+        #     node_size=500,
+        #     font_size=8
+        # )
 
-        plt.pause(0.1)
-        plt.draw()
+        # plt.pause(0.1)
+        # plt.draw()
 
         for ((cx, cy), object_pos) in object_poses_buf:
 
@@ -445,24 +446,55 @@ class SamWorld:
         # Display the annotated frame
         cv2.imshow("SAM3 Video", annotated)
 
-        cv2.waitKey(0)
-        cv2.destroyWindow("SAM3 Video")
+        # cv2.waitKey(0)
+        # cv2.destroyWindow("SAM3 Video")
 
-        # if cv2.waitKey(1) & 0xFF == ord("q"):
-        #     return False
+        if cv2.waitKey(1) & 0xFF == ord("q"):
 
+            mst = nx.minimum_spanning_tree(self.G, weight="weight")
+            nx.write_graphml(mst, "graph.graphml")
+
+            return False
+
+        mst = nx.minimum_spanning_tree(self.G, weight="weight")
+        nx.write_graphml(mst, "graph.graphml")
         return True
+    
 
 
 if __name__ == "__main__":
 
     # world = SamWorld("assets/challenge_video.mp4")
     world = SamWorld(
-r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"    )
+        "C:/Users/jleto/Downloads/rgbd_dataset_freiburg1_xyz/rgbd_dataset_freiburg1_xyz"
+    )
 
-    while True:
+    try:
+        while True:
+            running = world.run()
+            if not running:
+                break
 
-        running = world.run()
+    except KeyboardInterrupt:
+        print("Saving graph...")
 
-        if not running:
-            break
+    finally:
+        mst = nx.minimum_spanning_tree(world.G, weight="weight")
+        nx.write_graphml(mst, "graph.graphml")
+
+        print("Graph saved.")
+
+
+        pos = nx.kamada_kawai_layout(mst, weight="weight")
+
+        edge_labels = nx.get_edge_attributes(mst, "weight")
+
+        nx.draw(mst, pos, with_labels=True, node_size=1000)
+
+        nx.draw_networkx_edge_labels(
+            mst,
+            pos,
+            edge_labels=edge_labels
+        )
+
+        plt.show()
