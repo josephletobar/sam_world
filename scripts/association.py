@@ -9,8 +9,37 @@ def association(new_data, all_data):
     if len(embedding_matrix) == 0:
         return None, None, None
 
-    CLIP_WEIGHT = 0.7
-    POSE_WEIGHT = 0.4
+    CLIP_WEIGHT = 0.6
+    POSE_WEIGHT = 0.3
+    COLOR_WEIGHT = 0.05
+    SHAPE_WEIGHT = 0.05
+
+    # Color Score
+    curr_color = segmented[segmented.any(axis=2)].mean(axis=0)
+    old_colors = np.array([
+        obj[obj.any(axis=2)].mean(axis=0)
+        for obj in segmented_objs
+    ])
+    color_scores = np.exp(
+        -np.linalg.norm(old_colors - curr_color, axis=1) / 100
+    )
+
+    # Geometric Shape Score
+    curr_mask = cv2.resize(
+        (segmented.any(axis=2)).astype(np.uint8),
+        (64, 64)
+    )
+    old_masks = [
+        cv2.resize(
+            (obj.any(axis=2)).astype(np.uint8),
+            (64, 64)
+        )
+        for obj in segmented_objs
+    ]
+    shape_scores = np.array([
+        1 - cv2.absdiff(curr_mask, old_mask).mean()
+        for old_mask in old_masks
+    ])
 
     # Cosine Sims
     cosine_sims = cosine_similarity([embedding], embedding_matrix)[0]
@@ -28,7 +57,9 @@ def association(new_data, all_data):
     # Final Probability
     probabilities = (
         CLIP_WEIGHT * cosine_sims +
-        POSE_WEIGHT * pose_scores
+        POSE_WEIGHT * pose_scores +
+        COLOR_WEIGHT * color_scores +
+        SHAPE_WEIGHT * shape_scores 
     )
 
     best_idx = np.argmax(probabilities)
@@ -45,6 +76,8 @@ def association(new_data, all_data):
     print("MATCHED:", poses_np[best_idx])
     print(f"CLIP:  {cosine_sims[best_idx]:.4f}")
     print(f"POSE:  {pose_scores[best_idx]:.4f}")
+    print(f"COLOR:  {color_scores[best_idx]:.4f}")
+    print(f"SHAPE:  {shape_scores[best_idx]:.4f}")
     print(f"FINAL: {best_prob:.4f}")
 
     # match_img = cv2.resize(
