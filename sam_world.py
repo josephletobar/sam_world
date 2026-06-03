@@ -9,8 +9,10 @@ import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
 from scripts.get_obj_pos import get_pos
-from scripts.clip_embedding import embed
+from scripts.graph_chat import ChatWithGraph
+from scripts.clip_embedding import embed_image, embed_text
 from scripts.association import association
+from networkx.readwrite import json_graph
 import networkx as nx
 from sklearn.metrics.pairwise import cosine_similarity
 from networkx.drawing.nx_pydot import graphviz_layout
@@ -111,7 +113,7 @@ class SamWorld:
         self.sam_labels = []
 
         # In memory storage (index alligned)
-        self.node_ids = []
+        self.labels = []
         self.embedding_matrix = [] # img embeddings
         self.segmented_rgbs = [] # rgb images
         self.world_poses = [] 
@@ -119,21 +121,21 @@ class SamWorld:
         self.segmented_depths = [] # depth channel
         self.poses = [] # depth channel
 
+        self.label_counts = {}
+
     # Adds to Graph and updates memories
     def add_object(
         self,
-        node,
-        embedding,
+        txt_embedding,
+        img_embedding,
         node_id,
         img,
         world_pos = None,
     ):
         SCALE = 5000
 
-        self.graph["nodes"].append(node)
-
-        self.embedding_matrix.append(embedding)
-        self.node_ids.append(node_id)
+        self.embedding_matrix.append(img_embedding)
+        self.labels.append(node_id)
         self.segmented_rgbs.append(img)
 
         if world_pos is not None:
@@ -142,7 +144,14 @@ class SamWorld:
         world_x, world_y, world_z = world_pos
 
 
-        self.G.add_node(node_id)
+        self.G.add_node(
+            node_id,
+            world_x=float(world_x),
+            world_y=float(world_y),
+            world_z=float(world_z),
+            txt_embedding=txt_embedding.tolist(),
+            img_embedding=img_embedding
+        )
 
         self.pos[node_id] = (
             world_x,
@@ -152,7 +161,7 @@ class SamWorld:
         print("NEW OBJECT !!!!!!!!!!!!!!!!!!!!!!!")
 
         for other_id, other_pos in zip(
-            self.node_ids,
+            self.labels,
             self.world_poses
         ):
             if node_id != other_id: 
@@ -284,9 +293,6 @@ class SamWorld:
             # Results object
             cls_id = int(box.cls[0])
             label = result.names[cls_id]
-            node_id = (
-                f"{label}_{len(self.graph['nodes'])}"
-            )
 
             mask = result.masks.data[i]
             mask = mask.cpu().numpy()
@@ -314,19 +320,12 @@ class SamWorld:
                 xs.min():xs.max()
             ]
 
-            embedding = embed(segmented_rgb)
-
-
-            # JSON-Based Graph Update
-            node = {
-                "id": node_id,
-                "label": label,
-                "embedding": embedding,
-            }
+            img_embedding = embed_image(segmented_rgb)
+            txt_embedding = embed_text(label)
 
             # Node/Object Association
-            new_data = (node_id, embedding, segmented_rgb, world_pos if slam_dict else None)
-            all_data = (self.node_ids, self.embedding_matrix, self.segmented_rgbs, self.world_poses if slam_dict else None)
+            new_data = (label, img_embedding, segmented_rgb, world_pos if slam_dict else None)
+            all_data = (self.labels, self.embedding_matrix, self.segmented_rgbs, self.world_poses if slam_dict else None)
 
             if len(self.embedding_matrix) > 0:
 
@@ -337,9 +336,14 @@ class SamWorld:
                 print(best_prob)
                 print("-------")
                 if best_prob < self.SIM_THRESHOLD:
+
+                    count = self.label_counts.get(label, 0)
+                    node_id = f"{label}_{count}"
+                    self.label_counts[label] = count + 1
+
                     self.add_object(
-                        node,
-                        embedding,
+                        txt_embedding,
+                        img_embedding,
                         node_id,
                         segmented_rgb,
                         world_pos if slam_dict else None
@@ -362,9 +366,14 @@ class SamWorld:
 
             # First Node
             else:
+
+                count = self.label_counts.get(label, 0)
+                node_id = f"{label}_{count}"
+                self.label_counts[label] = count + 1
+
                 self.add_object(
-                    node,
-                    embedding,
+                    txt_embedding,
+                    img_embedding,
                     node_id,
                     segmented_rgb,
                     world_pos if slam_dict else None
@@ -424,12 +433,19 @@ class SamWorld:
         if cv2.waitKey(1) & 0xFF == ord("q"):
 
             mst = nx.minimum_spanning_tree(self.G, weight="weight")
-            nx.write_graphml(mst, "graph.graphml")
+
+            data = json_graph.node_link_data(mst)
+            with open("graph.json", "w") as f:
+                json.dump(data, f, indent=2)
 
             return False
 
         mst = nx.minimum_spanning_tree(self.G, weight="weight")
-        nx.write_graphml(mst, "graph.graphml")
+
+        data = json_graph.node_link_data(mst)
+        with open("graph.json", "w") as f:
+            json.dump(data, f, indent=2)
+
         return True
     
 
@@ -455,7 +471,10 @@ if __name__ == "__main__":
 
     finally:
         mst = nx.minimum_spanning_tree(world.G, weight="weight")
-        nx.write_graphml(mst, "graph.graphml")
+
+        data = json_graph.node_link_data(mst)
+        with open("graph.json", "w") as f:
+            json.dump(data, f, indent=2)
 
         print("Graph saved.")
 
@@ -471,4 +490,8 @@ if __name__ == "__main__":
             edge_labels=edge_labels
         )
 
-        plt.show()
+        plt.show(block=False)
+
+        chat = ChatWithGraph(mst, world.client)
+        while True:
+            chat.run()
