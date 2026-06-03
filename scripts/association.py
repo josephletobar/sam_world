@@ -9,8 +9,8 @@ def association(new_data, all_data):
     if len(embedding_matrix) == 0:
         return None, None, None
 
-    CLIP_WEIGHT = 0.75
-    POSE_WEIGHT = 0.25
+    CLIP_WEIGHT = 0.7
+    POSE_WEIGHT = 0.4
 
     # Cosine Sims
     cosine_sims = cosine_similarity([embedding], embedding_matrix)[0]
@@ -22,7 +22,7 @@ def association(new_data, all_data):
         poses_np - curr_pose,
         axis=1
     )
-    SIGMA = 12
+    SIGMA = 2
     pose_scores = np.exp(-dists / SIGMA)
 
     # Final Probability

@@ -76,24 +76,9 @@ class SamWorld:
         )
         self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
 
-        # Graph Display Setup
-        # plt.ion()
-        # plt.figure(figsize=(6, 6))
-        # plt.show(block=False)
+        # Graph SETUP
         self.G = nx.Graph()
         self.pos = {}
-
-        # JSON-Based Graph Setup
-        self.GRAPH_PATH = "graph.json"
-        self.graph = {
-            "nodes": [],
-            "edges": []
-        }
-        with open(self.GRAPH_PATH, "w") as f:
-            json.dump(self.graph, f, indent=2)
-
-        self.frame_count = 0 # frame tracking
-
 
         # Set Constants/Thresholds
         self.SAM_STEP = 5
@@ -123,6 +108,9 @@ class SamWorld:
 
         self.label_counts = {}
 
+        self.frame_count = 0 # frame tracking
+
+
     # Adds to Graph and updates memories
     def add_object(
         self,
@@ -132,7 +120,8 @@ class SamWorld:
         img,
         world_pos = None,
     ):
-        SCALE = 5000
+
+        print("--NEW OBJECT--")
 
         self.embedding_matrix.append(img_embedding)
         self.labels.append(node_id)
@@ -158,8 +147,6 @@ class SamWorld:
             world_z
         )
 
-        print("NEW OBJECT !!!!!!!!!!!!!!!!!!!!!!!")
-
         for other_id, other_pos in zip(
             self.labels,
             self.world_poses
@@ -173,7 +160,7 @@ class SamWorld:
                 self.G.add_edge(
                     node_id,
                     other_id,
-                    weight=int(dist)
+                    weight=round(dist, 2)
                 )
 
     def frame_dif(self, frame):
@@ -192,7 +179,23 @@ class SamWorld:
         else:
             run_gpt = False
 
-        return False
+        run_gpt = False # override to false for debugging
+        return run_gpt
+    
+    def draw_graph(self):
+
+        mst = nx.minimum_spanning_tree(self.G, weight="weight")
+        edge_labels = nx.get_edge_attributes(mst, "weight")
+
+        nx.draw(mst, self.pos, with_labels=True, node_size=1000)
+
+        nx.draw_networkx_edge_labels(
+            mst,
+            self.pos,
+            edge_labels=edge_labels
+        )
+
+        return mst
 
     def get_next_frame(self):
 
@@ -210,12 +213,10 @@ class SamWorld:
                 self.rgb_files[self.frame_idx]
             )
             depth_frame = cv2.imread(
-                self.depth_files[self.frame_idx]
+                self.depth_files[self.frame_idx],
+                cv2.IMREAD_UNCHANGED
             )
-            depth_frame = cv2.resize(
-                depth_frame,
-                (640, 360)
-            )
+           
             pose = self.pose_data[self.frame_idx]
 
             slam_dict = {
@@ -250,13 +251,12 @@ class SamWorld:
             self.prev_frame = frame
             self.run_gpt = True
             score = None
-
         elif self.frame_count % self.CHANGE_STEP == 0:
             self.run_gpt = self.frame_dif(frame)
 
         # Prepare image for LLM
-        frame = cv2.resize(frame, (640, 360))
-        _, buffer = cv2.imencode(".jpg", frame)
+        downsized_frame = cv2.resize(frame, (640, 360))
+        _, buffer = cv2.imencode(".jpg", downsized_frame)
         base64_image = base64.b64encode(
             buffer
         ).decode("utf-8")
@@ -283,11 +283,10 @@ class SamWorld:
             save=False,
             verbose=False
         )
-
         result = results[0]
         annotated = result.plot()
 
-        # Add detected labels to graph
+        # Add Detected Labels to Knowledge Graph
         object_poses_buf = []
         for i, box in enumerate(result.boxes):
             # Results object
@@ -307,12 +306,6 @@ class SamWorld:
 
             object_poses_buf.append((image_pos, world_pos))
 
-            # dont tight crop
-            # segmented_depth = segmented_depth[
-            #     ys.min():ys.max(),
-            #     xs.min():xs.max()
-            # ]
-
             segmented_rgb = frame.copy()
             segmented_rgb[mask == 0] = 0
             segmented_rgb = segmented_rgb[
@@ -323,7 +316,7 @@ class SamWorld:
             img_embedding = embed_image(segmented_rgb)
             txt_embedding = embed_text(label)
 
-            # Node/Object Association
+            # Object Association
             new_data = (label, img_embedding, segmented_rgb, world_pos if slam_dict else None)
             all_data = (self.labels, self.embedding_matrix, self.segmented_rgbs, self.world_poses if slam_dict else None)
 
@@ -332,9 +325,9 @@ class SamWorld:
                 best_prob, best_id, best_idx = association(new_data, all_data)
         
                 # New Node
-                print("-------")
-                print(best_prob)
-                print("-------")
+                # print("-------")
+                # print(best_prob)
+                # print("-------")
                 if best_prob < self.SIM_THRESHOLD:
 
                     count = self.label_counts.get(label, 0)
@@ -366,7 +359,6 @@ class SamWorld:
 
             # First Node
             else:
-
                 count = self.label_counts.get(label, 0)
                 node_id = f"{label}_{count}"
                 self.label_counts[label] = count + 1
@@ -379,18 +371,10 @@ class SamWorld:
                     world_pos if slam_dict else None
                 )
 
-            with open(self.GRAPH_PATH, "w") as f:
-                json.dump(
-                    self.graph,
-                    f,
-                    indent=2
-                )
-
         # Display graph using NetworkX and Matplotlib
         plt.clf()
 
         mst = nx.minimum_spanning_tree(self.G, weight="weight")
-
         edge_labels = nx.get_edge_attributes(mst, "weight")
 
         nx.draw(mst, self.pos, with_labels=True, node_size=1000)
@@ -470,25 +454,15 @@ if __name__ == "__main__":
         print(e)
 
     finally:
-        mst = nx.minimum_spanning_tree(world.G, weight="weight")
+
+        mst = world.draw_graph()
 
         data = json_graph.node_link_data(mst)
         with open("graph.json", "w") as f:
             json.dump(data, f, indent=2)
-
         print("Graph saved.")
 
-        # pos = nx.kamada_kawai_layout(mst, weight="weight")
-
         edge_labels = nx.get_edge_attributes(mst, "weight")
-
-        nx.draw(mst, world.pos, with_labels=True, node_size=1000)
-
-        nx.draw_networkx_edge_labels(
-            mst,
-            world.pos,
-            edge_labels=edge_labels
-        )
 
         plt.show(block=False)
 
