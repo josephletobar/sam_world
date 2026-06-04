@@ -82,7 +82,7 @@ class OllamaClient:
         return response["message"]["content"]
 
 
-def vlm(base64_image: str, DEFAULT_LABELS, client=OllamaClient()):
+def vlm(base64_image: str, DEFAULT_LABELS, client=OpenAIClient()):
 
     prompt = PROMPT.format(
         DEFAULT_LABELS=DEFAULT_LABELS
@@ -92,8 +92,6 @@ def vlm(base64_image: str, DEFAULT_LABELS, client=OllamaClient()):
         prompt=prompt,
         image=base64_image
     )
-
-    print(response)
 
 
     sam_labels = ast.literal_eval(

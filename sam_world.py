@@ -438,12 +438,12 @@ class SamWorld:
 if __name__ == "__main__":
 
     # world = SamWorld("assets/challenge_video.mp4")
-    # world = SamWorld(
-    #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"
-    # )
     world = SamWorld(
-        r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam"
+        r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"
     )
+    # world = SamWorld(
+    #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam"
+    # )
 
 
     try:
