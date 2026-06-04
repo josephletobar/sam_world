@@ -13,7 +13,7 @@ Rules:
 - No explanation
 - No numbering
 - No sentences
-- If a label is already present in {DEFAULT_LABELS}, or is a close synonym / near-duplicate of an existing label, DO NOT repeat it
+- If a label is already present in {vocabulary}, or is a close synonym / near-duplicate of an existing label, DO NOT repeat it
 
 - Focus on clearly identifiable objects, structures, terrain, hazards, and human-related entities useful for search and rescue robotics
 - Prefer discrete, distinguishable entities that can be individually localized or tracked
@@ -82,10 +82,10 @@ class OllamaClient:
         return response["message"]["content"]
 
 
-def vlm(base64_image: str, DEFAULT_LABELS, client=OpenAIClient()):
+def vlm(base64_image: str, vocabulary, client=OpenAIClient()):
 
     prompt = PROMPT.format(
-        DEFAULT_LABELS=DEFAULT_LABELS
+        vocabulary=list(vocabulary)
     )
 
     response = client.generate(

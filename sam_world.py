@@ -87,6 +87,7 @@ class SamWorld:
             "car",
             "tree"
         ]
+        self.vocabulary = set(self.DEFAULT_LABELS)
 
         # Init Variables
         self.run_gpt = False
@@ -268,13 +269,15 @@ class SamWorld:
             print("--- LLM RUNNING ---")
             self.sam_labels = vlm(
                 base64_image,
-                self.DEFAULT_LABELS
+                list(self.vocabulary)
             )
             print(self.sam_labels)
         full_labels = (
             self.DEFAULT_LABELS +
             self.sam_labels
         )
+
+        self.vocabulary.update(self.sam_labels)
 
         # Run SAM3 with the combined labels
         results = self.sam_predictor(
