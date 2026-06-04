@@ -12,10 +12,10 @@ def should_reprompt(rgb_frame, pos):
     # return False
 
     SEMANTIC_WEIGHT = 0.2
-    GRAY_WEIGHT = 0.2
-    ROT_WEIGHT = 0.3
+    GRAY_WEIGHT = 0.3
+    ROT_WEIGHT = 0.2
     POS_WEIGHT = 0.2
-    TIME_WEIGHT = 0.3
+    TIME_WEIGHT = 0.05
     
     # Unpack 
     prev_rgb_frame, cur_rgb_frame = rgb_frame
@@ -88,19 +88,13 @@ def should_reprompt(rgb_frame, pos):
     else:
         run_gpt = False
 
-    # run_gpt = False # override to false for debugging
-
-    # print("\n========== REPROMPT DEBUG ==========")
-    # print(f"GRAY:      {GRAY_WEIGHT * gray_delta:.4f}")
-    # print(f"SEMANTIC:  {SEMANTIC_WEIGHT * semantic_delta:.4f}")
-    # print(f"TIME:      {TIME_WEIGHT * time_delta:.4f}")
-    # print(f"POSITION:  {POS_WEIGHT * translation_delta:.4f}")
-    # print(f"ROTATION:  {ROT_WEIGHT * rotation_delta:.4f}")
-    # print(f"ROTATION DELTA:  {rotation_delta:.4f}")
-    # print("PREV ROT:", [prev_pos[k] for k in ("qx","qy","qz","qw")])
-    # print("CURR ROT:", [cur_pos[k] for k in ("qx","qy","qz","qw")])
-    # print("-" * 35)
+    print("\n========== REPROMPT DEBUG ==========")
+    print(f"GRAY:      {GRAY_WEIGHT * gray_delta:.4f}")
+    print(f"SEMANTIC:  {SEMANTIC_WEIGHT * semantic_delta:.4f}")
+    print(f"TIME:      {TIME_WEIGHT * time_delta:.4f}")
+    print(f"POSITION:  {POS_WEIGHT * translation_delta:.4f}")
+    print(f"ROTATION:  {ROT_WEIGHT * rotation_delta:.4f}")
+    print("-" * 35)
     print(f"FINAL:     {prob:.4f}")
-    # print(f"RUN GPT:   {run_gpt}")
 
     return run_gpt
