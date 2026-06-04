@@ -9,6 +9,7 @@ import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from scripts.llm import llm
 from scripts.get_obj_pos import get_pos
+from scripts.scene_dif import should_reprompt
 from scripts.graph_chat import ChatWithGraph
 from scripts.clip_embedding import embed_image, embed_text
 from scripts.association import association
@@ -94,8 +95,11 @@ class SamWorld:
 
         # Init Variables
         self.run_gpt = False
-        self.prev_frame = None
         self.sam_labels = []
+        self.prev_gpt_call = {
+            "frame" : None,
+            "position" : None
+        }
 
         # In memory storage (index alligned)
         self.labels = []
@@ -163,24 +167,7 @@ class SamWorld:
                     weight=round(dist, 2)
                 )
 
-    def frame_dif(self, frame):
-
-        gray_prev = cv2.cvtColor(self.prev_frame, cv2.COLOR_BGR2GRAY)
-
-        gray_curr = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        diff = cv2.absdiff(gray_curr, gray_prev)
-        score = diff.mean()
-
-        # print(f"DIFFERENCE SCORE: {score}")
-
-        if score > self.DIFF_TRESHOLD:
-            run_gpt = True
-        else:
-            run_gpt = False
-
-        run_gpt = False # override to false for debugging
-        return run_gpt
+    
     
     def draw_graph(self):
 
@@ -233,7 +220,6 @@ class SamWorld:
     def run(self):
 
         ret, frame, slam_dict = self.get_next_frame()
-
         pose = slam_dict["pose"]
         depth = slam_dict["depth"]
 
@@ -246,13 +232,34 @@ class SamWorld:
         if self.frame_count % self.SAM_STEP != 0:
             return True
 
+        self.run_gpt = False
+
         # Stepped Frame Differencing Logic
-        if self.prev_frame is None:
-            self.prev_frame = frame
+
+        # first iteration
+        if (
+            self.prev_gpt_call["frame"] is None
+            or
+            self.prev_gpt_call["position"] is None
+        ):
+
+            self.prev_gpt_call["frame"] = frame
+            self.prev_gpt_call["position"] = pose
+
             self.run_gpt = True
-            score = None
+
         elif self.frame_count % self.CHANGE_STEP == 0:
-            self.run_gpt = self.frame_dif(frame)
+
+            prev_cur_frames =  self.prev_gpt_call["frame"], frame 
+            prev_cur_pos = self.prev_gpt_call["position"], pose
+
+            self.run_gpt = should_reprompt(prev_cur_frames, prev_cur_pos)
+
+            if self.run_gpt == True:
+                self.prev_gpt_call["frame"] = frame
+                self.prev_gpt_call["position"] = pose
+
+            # self.run_gpt = False
 
         # Prepare image for LLM
         downsized_frame = cv2.resize(frame, (640, 360))
