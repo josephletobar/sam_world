@@ -6,8 +6,7 @@ from openai import OpenAI
 import base64
 import random
 import numpy as np
-from dotenv import find_dotenv, load_dotenv
-from scripts.llm import llm
+from scripts.vlm import vlm
 from scripts.get_obj_pos import get_pos
 from scripts.scene_dif import should_reprompt
 from scripts.graph_chat import ChatWithGraph
@@ -21,7 +20,6 @@ import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
-load_dotenv(override=True)
 
 class SamWorld:
 
@@ -64,9 +62,6 @@ class SamWorld:
                     })
 
             self.frame_idx = 0
-
-        # LLM Setup
-        self.client = OpenAI()
 
         # SAM3 Setup
         overrides = dict(
@@ -271,8 +266,7 @@ class SamWorld:
         # Run LLM if significant change detected or first frame
         if self.run_gpt:
             print("--- LLM RUNNING ---")
-            self.sam_labels = llm(
-                self.client,
+            self.sam_labels = vlm(
                 base64_image,
                 self.DEFAULT_LABELS
             )
@@ -477,6 +471,6 @@ if __name__ == "__main__":
 
         plt.show(block=False)
 
-        chat = ChatWithGraph(mst, world.client)
+        chat = ChatWithGraph(mst)
         while True:
             chat.run()

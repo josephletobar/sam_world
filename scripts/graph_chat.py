@@ -2,6 +2,7 @@ from openai import OpenAI
 from scripts.clip_embedding import embed_text
 import numpy as np
 import json
+from dotenv import find_dotenv, load_dotenv
 from pprint import pprint
 from networkx.readwrite import json_graph
 from sklearn.metrics.pairwise import cosine_similarity
@@ -15,10 +16,13 @@ RAG = False
 
 class ChatWithGraph:
 
-    def __init__(self, graph, client):
+    def __init__(self, graph):
+
+        load_dotenv(override=True)
+
+        self.client = OpenAI()
 
         self.graph = graph
-        self.client = client
 
         self.txt_embeddings = np.array([
             attrs["txt_embedding"]
