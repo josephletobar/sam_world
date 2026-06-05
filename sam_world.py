@@ -19,7 +19,11 @@ from networkx.drawing.nx_pydot import graphviz_layout
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
+from sklearn.cluster import DBSCAN
+from mpl_toolkits.mplot3d import Axes3D
 
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
 
 class SamWorld:
 
@@ -119,7 +123,7 @@ class SamWorld:
         img_embedding,
         node_id,
         img,
-        world_pos = None,
+        world_pos,
     ):
 
         print("--NEW OBJECT--")
@@ -128,8 +132,7 @@ class SamWorld:
         self.labels.append(node_id)
         self.segmented_rgbs.append(img)
 
-        if world_pos is not None:
-            self.world_poses.append(world_pos)
+        self.world_poses.append(world_pos)
 
         world_x, world_y, world_z = world_pos
 
@@ -180,7 +183,21 @@ class SamWorld:
 
         edge_labels = nx.get_edge_attributes(final_graph, "weight")
 
-        nx.draw(final_graph, self.pos, with_labels=True, node_size=1000)
+        node_colors = [
+            self.G.nodes[n]["cluster"]
+            for n in final_graph.nodes()
+        ]
+
+        nx.draw(
+            final_graph,
+            self.pos,
+            with_labels=True,
+            node_size=1000,
+            node_color=node_colors,
+            cmap=plt.cm.tab10
+        )
+
+        # nx.draw(final_graph, self.pos, with_labels=True, node_size=1000)
 
         nx.draw_networkx_edge_labels(
             final_graph,
@@ -189,6 +206,27 @@ class SamWorld:
         )
 
         return final_graph
+    
+    
+    def cluster(self):
+        nodes = list(self.G.nodes())
+
+        X = np.array([
+            [
+                self.G.nodes[n]["world_x"],
+                self.G.nodes[n]["world_y"],
+                self.G.nodes[n]["world_z"],
+            ]
+            for n in nodes
+        ])
+
+        labels = DBSCAN(
+            eps=0.4,
+            min_samples=3
+        ).fit_predict(X)
+
+        for node, cluster_id in zip(nodes, labels):
+            self.G.nodes[node]["cluster"] = int(cluster_id)
 
     def get_next_frame(self):
 
@@ -378,6 +416,8 @@ class SamWorld:
                     world_pos if slam_dict else None
                 )
 
+        self.cluster()
+
         # Display graph using NetworkX and Matplotlib
         plt.clf()
 
@@ -469,6 +509,50 @@ if __name__ == "__main__":
     finally:
 
         final_graph = world.draw_graph()
+
+        plt.close("all")
+
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+
+        for node in final_graph.nodes():
+            x = final_graph.nodes[node]["world_x"]
+            y = final_graph.nodes[node]["world_y"]
+            z = final_graph.nodes[node]["world_z"]
+
+            cluster = final_graph.nodes[node].get("cluster", -1)
+            
+            color = plt.cm.tab10(cluster % 10)
+            ax.scatter(
+                x, y, z,
+                color=color,
+                s=150
+            )
+
+            print(node, cluster)
+
+            ax.text(x, y, z, node)
+
+        for u, v in final_graph.edges():
+            x1 = final_graph.nodes[u]["world_x"]
+            y1 = final_graph.nodes[u]["world_y"]
+            z1 = final_graph.nodes[u]["world_z"]
+
+            x2 = final_graph.nodes[v]["world_x"]
+            y2 = final_graph.nodes[v]["world_y"]
+            z2 = final_graph.nodes[v]["world_z"]
+
+            ax.plot([x1, x2], [y1, y2], [z1, z2], color="gray", alpha=0.4)
+
+            weight = final_graph[u][v]["weight"]
+
+            ax.text(
+                (x1 + x2) / 2,
+                (y1 + y2) / 2,
+                (z1 + z2) / 2,
+                f"{weight:.2f}"
+            )
 
         data = json_graph.node_link_data(final_graph)
         with open("graph.json", "w") as f:
