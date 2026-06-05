@@ -85,7 +85,8 @@ class SamWorld:
         self.DEFAULT_LABELS = [
             "road",
             "car",
-            "tree"
+            "tree",
+            "monitor"
         ]
         self.vocabulary = set(self.DEFAULT_LABELS)
 
@@ -167,18 +168,27 @@ class SamWorld:
     
     def draw_graph(self):
 
-        mst = nx.minimum_spanning_tree(self.G, weight="weight")
-        edge_labels = nx.get_edge_attributes(mst, "weight")
+        threshold_graph = nx.Graph(
+            (u, v, d)
+            for u, v, d in self.G.edges(data=True)
+            if d["weight"] < 0.5
+        )
 
-        nx.draw(mst, self.pos, with_labels=True, node_size=1000)
+        mst = nx.minimum_spanning_tree(self.G, weight="weight")
+
+        final_graph = nx.compose(mst, threshold_graph)
+
+        edge_labels = nx.get_edge_attributes(final_graph, "weight")
+
+        nx.draw(final_graph, self.pos, with_labels=True, node_size=1000)
 
         nx.draw_networkx_edge_labels(
-            mst,
+            final_graph,
             self.pos,
             edge_labels=edge_labels
         )
 
-        return mst
+        return final_graph
 
     def get_next_frame(self):
 
@@ -257,18 +267,11 @@ class SamWorld:
 
             # self.run_gpt = False
 
-        # Prepare image for LLM
-        downsized_frame = cv2.resize(frame, (640, 360))
-        _, buffer = cv2.imencode(".jpg", downsized_frame)
-        base64_image = base64.b64encode(
-            buffer
-        ).decode("utf-8")
-
         # Run LLM if significant change detected or first frame
         if self.run_gpt:
             print("--- LLM RUNNING ---")
             self.sam_labels = vlm(
-                base64_image,
+                frame,
                 list(self.vocabulary)
             )
             print(self.sam_labels)
@@ -378,16 +381,18 @@ class SamWorld:
         # Display graph using NetworkX and Matplotlib
         plt.clf()
 
-        mst = nx.minimum_spanning_tree(self.G, weight="weight")
-        edge_labels = nx.get_edge_attributes(mst, "weight")
+        # mst = nx.minimum_spanning_tree(self.G, weight="weight")
+        # edge_labels = nx.get_edge_attributes(mst, "weight")
 
-        nx.draw(mst, self.pos, with_labels=True, node_size=1000)
+        # nx.draw(mst, self.pos, with_labels=True, node_size=1000)
 
-        nx.draw_networkx_edge_labels(
-            mst,
-            self.pos,
-            edge_labels=edge_labels
-        )
+        # nx.draw_networkx_edge_labels(
+        #     mst,
+        #     self.pos,
+        #     edge_labels=edge_labels
+        # )
+
+        self.draw_graph()
 
         plt.pause(0.1)
         plt.draw()
@@ -420,17 +425,17 @@ class SamWorld:
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
 
-            mst = nx.minimum_spanning_tree(self.G, weight="weight")
+            final_graph = self.draw_graph()
 
-            data = json_graph.node_link_data(mst)
+            data = json_graph.node_link_data(final_graph)
             with open("graph.json", "w") as f:
                 json.dump(data, f, indent=2)
 
             return False
 
-        mst = nx.minimum_spanning_tree(self.G, weight="weight")
+        final_graph = self.draw_graph()
 
-        data = json_graph.node_link_data(mst)
+        data = json_graph.node_link_data(final_graph)
         with open("graph.json", "w") as f:
             json.dump(data, f, indent=2)
 
@@ -463,17 +468,15 @@ if __name__ == "__main__":
 
     finally:
 
-        mst = world.draw_graph()
+        final_graph = world.draw_graph()
 
-        data = json_graph.node_link_data(mst)
+        data = json_graph.node_link_data(final_graph)
         with open("graph.json", "w") as f:
             json.dump(data, f, indent=2)
         print("Graph saved.")
 
-        edge_labels = nx.get_edge_attributes(mst, "weight")
-
         plt.show(block=False)
 
-        chat = ChatWithGraph(mst)
+        chat = ChatWithGraph(final_graph)
         while True:
             chat.run()

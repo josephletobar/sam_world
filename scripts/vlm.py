@@ -2,10 +2,46 @@ import ast
 from dotenv import find_dotenv, load_dotenv
 from openai import OpenAI
 import ollama
+import time
+import cv2
+import base64
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
 
 
-PROMPT = """
+LLM_PROMPT = """
+Vocabulary:
+{vocabulary}
+
+Candidate labels:
+{vlm_out}
+
+Return a Python list containing all candidate labels that are not already in the vocabulary.
+
+Rules:
+- lowercase
+- remove duplicates
+- merge synonyms
+- return only a Python list
+
+Return ONLY:
+["label1","label2"]
+"""
+
+OPEN_AI_VLM_PROMPT = """
 Return ONLY a valid Python list of concise semantic segmentation labels.
+
+Existing vocabulary:
+{vocabulary}
+
+Candidate labels from a vision model (optional):
+{vlm_out}
+
+If candidate labels are provided:
+- Merge synonyms and near-duplicates
+- Remove labels already present in the vocabulary
+- Keep only labels relevant to search and rescue
 
 Rules:
 - Maximum 8 labels
@@ -13,9 +49,9 @@ Rules:
 - No explanation
 - No numbering
 - No sentences
-- If a label is already present in {vocabulary}, or is a close synonym / near-duplicate of an existing label, DO NOT repeat it
+- If a label is already present in the existing vocabulary, or is a close synonym / near-duplicate of an existing label, DO NOT repeat it, merge them into one if it appears. 
 
-- Focus on clearly identifiable objects, structures, terrain, hazards, and human-related entities useful for search and rescue robotics
+- Identify every distinct object visible in the scene. Be exhaustive with objects whenever they can be recognized with reasonable confidence. Output object names only.
 - Prefer discrete, distinguishable entities that can be individually localized or tracked
 - Avoid broad background regions or generic structural surfaces unless they are mission-relevant obstacles or landmarks
 - Do NOT include generic surfaces like "wall", "floor", "ceiling", or "room" unless uniquely important to navigation or hazard assessment
@@ -37,7 +73,13 @@ class OpenAIClient:
         self.client = OpenAI()
         self.model = model
 
-    def generate(self, prompt, image):
+
+    def generate(self, vocabulary, image):
+
+        prompt = OPEN_AI_VLM_PROMPT.format(
+            vocabulary=list(vocabulary),
+            vlm_out=""
+        )
 
         response = self.client.responses.create(
             model=self.model,
@@ -58,46 +100,94 @@ class OpenAIClient:
             ]
         )
 
+        sam_labels = ast.literal_eval(
+            response.output_text
+        )
 
-        return response.output_text
+        return sam_labels
 
 
 class OllamaClient:
     def __init__(self, model="qwen2.5vl:3b"):
         self.model = model
 
-    def generate(self, prompt, image):
+    def generate(self, vocabulary, image):
 
-        response = ollama.chat(
+        t0 = time.time()
+        vlm_response = ollama.chat(
             model=self.model,
             messages=[
                 {
                     "role": "user",
-                    "content": prompt,
+                    "content": """
+                        List every visible object.
+
+                        Output only object names separated by commas.
+
+                        Do not explain.
+                        Do not describe the scene.
+                        Do not repeat this instruction.
+                        """,
                     "images": [image]
                 }
             ]
         )
 
-        return response["message"]["content"]
+        vlm_response = vlm_response["message"]["content"]
+        print(vlm_response)
+        print("VLM:", time.time() - t0)
 
 
-def vlm(base64_image: str, vocabulary, client=OpenAIClient()):
+        # prompt = LLM_PROMPT.format(
+        #     vocabulary=list(vocabulary),
+        #     vlm_out=vlm_response
+        # )
+        # t0 = time.time()
+        # response = ollama.chat(
+        #     model="llama3.2:3b",
+        #     options={
+        #         "temperature": 0,
+        #         "num_predict": 50
+        #     },
+        #     messages=[
+        #         {
+        #             "role": "user",
+        #             "content": prompt
+        #         }
+        #     ]
+        # )
 
-    prompt = PROMPT.format(
-        vocabulary=list(vocabulary)
+        # print(vocabulary)
+        # print(response["message"]["content"])
+        # print("LLM:", time.time() - t0)
+
+        doc = nlp(vlm_response)
+
+        labels = [
+            chunk.text.lower().strip()
+            for chunk in doc.noun_chunks
+        ]
+
+        print(labels)
+
+        return labels
+
+
+
+def vlm(frame, vocabulary, client=OpenAIClient()):
+
+    # Prepare image for VLM
+    downsized_frame = cv2.resize(frame, (960, 540))
+    _, buffer = cv2.imencode(".jpg", downsized_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+    base64_image = base64.b64encode(buffer).decode("utf-8")
+
+    labels = client.generate(
+        vocabulary=vocabulary,
+        image=base64_image,
     )
 
-    response = client.generate(
-        prompt=prompt,
-        image=base64_image
-    )
-
-
-    sam_labels = ast.literal_eval(
-        response
-    )
 
 
 
-    return sam_labels
+    return labels
+
