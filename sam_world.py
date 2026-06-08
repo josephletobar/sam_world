@@ -6,6 +6,7 @@ from openai import OpenAI
 import base64
 import random
 import numpy as np
+import traceback
 from scripts.vlm import vlm
 from scripts.get_obj_pos import get_pos
 from scripts.scene_dif import should_reprompt
@@ -21,9 +22,13 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from sklearn.cluster import DBSCAN
 from mpl_toolkits.mplot3d import Axes3D
+from ultralytics import YOLOWorld
+
 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection="3d")
+
+
 
 class SamWorld:
 
@@ -37,34 +42,7 @@ class SamWorld:
         # SLAM STREAM DIR
         else:
             self.source_type = "slam stream"
-            self.rgb_files = sorted([
-                os.path.join(source, "rgb", f)
-                for f in os.listdir(os.path.join(source, "rgb"))
-            ])
-
-            self.depth_files = sorted([
-                os.path.join(source, "depth", f)
-                for f in os.listdir(os.path.join(source, "depth"))
-            ])
-
-            gt_path = os.path.join(source, "groundtruth.txt")
-            with open(gt_path, "r") as f:
-                self.pose_data = []
-                for line in f:
-                    if line.startswith("#"):
-                        continue
-                    parts = line.strip().split()
-                    self.pose_data.append({
-                        "timestamp": float(parts[0]),
-                        "tx": float(parts[1]),
-                        "ty": float(parts[2]),
-                        "tz": float(parts[3]),
-                        "qx": float(parts[4]),
-                        "qy": float(parts[5]),
-                        "qz": float(parts[6]),
-                        "qw": float(parts[7]),
-                    })
-
+            self.load_slam_data(source)
             self.frame_idx = 0
 
         # SAM3 Setup
@@ -75,6 +53,8 @@ class SamWorld:
             model="sam3.pt",
         )
         self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
+
+        self.yolo_model = YOLOWorld("yolov8x-worldv2.pt")
 
         # Graph SETUP
         self.G = nx.Graph()
@@ -87,10 +67,6 @@ class SamWorld:
         self.DIFF_TRESHOLD = 0.75
 
         self.DEFAULT_LABELS = [
-            "road",
-            "car",
-            "tree",
-            "monitor"
         ]
         self.vocabulary = set(self.DEFAULT_LABELS)
 
@@ -115,6 +91,120 @@ class SamWorld:
 
         self.frame_count = 0 # frame tracking
 
+    def load_slam_data(self, source):
+        self.rgb_files = sorted(
+            os.path.join(source, "rgb", f)
+            for f in os.listdir(os.path.join(source, "rgb"))
+        )
+
+        self.depth_files = sorted(
+            os.path.join(source, "depth", f)
+            for f in os.listdir(os.path.join(source, "depth"))
+        )
+
+        if len(self.rgb_files) == 0:
+            raise ValueError("No RGB images found")
+
+        if len(self.depth_files) == 0:
+            raise ValueError("No depth images found")
+
+        gt_path = os.path.join(source, "groundtruth.txt")
+
+        self.pose_data = []
+        with open(gt_path, "r") as f:
+            for line in f:
+                if line.startswith("#") or not line.strip():
+                    continue
+
+                parts = line.strip().split()
+
+                if len(parts) < 8:
+                    continue
+
+                self.pose_data.append({
+                    "timestamp": float(parts[0]),
+                    "tx": float(parts[1]),
+                    "ty": float(parts[2]),
+                    "tz": float(parts[3]),
+                    "qx": float(parts[4]),
+                    "qy": float(parts[5]),
+                    "qz": float(parts[6]),
+                    "qw": float(parts[7]),
+                })
+
+        if len(self.pose_data) == 0:
+            raise ValueError("No poses found")
+
+        rgb_count = len(self.rgb_files)
+        depth_count = len(self.depth_files)
+        pose_count = len(self.pose_data)
+
+        # load timestamps
+        rgb_ts_path = os.path.join(source, "rgb.txt")
+        depth_ts_path = os.path.join(source, "depth.txt")
+
+        self.rgb_timestamps = np.loadtxt(rgb_ts_path)
+        self.depth_timestamps = np.loadtxt(depth_ts_path)
+
+        self.pose_timestamps = np.array([
+            pose["timestamp"]
+            for pose in self.pose_data
+        ])
+
+        # precompute alignments
+        self.rgb_to_pose = []
+        self.rgb_to_depth = []
+
+        for rgb_ts in self.rgb_timestamps:
+
+            pose_idx = np.searchsorted(
+                self.pose_timestamps,
+                rgb_ts
+            )
+
+            if pose_idx > 0 and (
+                pose_idx == len(self.pose_timestamps)
+                or abs(self.pose_timestamps[pose_idx - 1] - rgb_ts)
+                < abs(self.pose_timestamps[pose_idx] - rgb_ts)
+            ):
+                pose_idx -= 1
+
+            depth_idx = np.searchsorted(
+                self.depth_timestamps,
+                rgb_ts
+            )
+
+            if depth_idx > 0 and (
+                depth_idx == len(self.depth_timestamps)
+                or abs(self.depth_timestamps[depth_idx - 1] - rgb_ts)
+                < abs(self.depth_timestamps[depth_idx] - rgb_ts)
+            ):
+                depth_idx -= 1
+
+            self.rgb_to_pose.append(pose_idx)
+            self.rgb_to_depth.append(depth_idx)
+
+        print("RGB:", len(self.rgb_files))
+        print("Depth:", len(self.depth_files))
+        print("Poses:", len(self.pose_data))
+        print("RGB->Pose:", len(self.rgb_to_pose))
+        print("RGB->Depth:", len(self.rgb_to_depth))
+
+        print(
+            "First RGB->Pose dt:",
+            abs(
+                self.pose_timestamps[self.rgb_to_pose[0]]
+                - self.rgb_timestamps[0]
+            )
+        )
+
+        print(
+            "Mean RGB->Pose dt:",
+            np.mean([
+                abs(self.pose_timestamps[p] - t)
+                for p, t in zip(self.rgb_to_pose, self.rgb_timestamps)
+            ])
+        )
 
     # Adds to Graph and updates memories
     def add_object(
@@ -124,6 +214,7 @@ class SamWorld:
         node_id,
         img,
         world_pos,
+        confidence,
     ):
 
         print("--NEW OBJECT--")
@@ -143,7 +234,8 @@ class SamWorld:
             world_y=float(world_y),
             world_z=float(world_z),
             txt_embedding=txt_embedding.tolist(),
-            img_embedding=img_embedding
+            img_embedding=img_embedding,
+            confidence=confidence
         )
 
         self.pos[node_id] = (
@@ -230,33 +322,56 @@ class SamWorld:
 
     def get_next_frame(self):
 
-        # VIDEO
         if self.source_type == "video":
             ret, frame = self.cap.read()
             return ret, frame, None
 
-        # IMAGE SEQUENCE
         elif self.source_type == "slam stream":
+
             if self.frame_idx >= len(self.rgb_files):
-                return False, None
+                return False, None, None
+
+            rgb_idx = self.frame_idx
+            depth_idx = self.rgb_to_depth[rgb_idx]
+            pose_idx = self.rgb_to_pose[rgb_idx]
 
             rgb_frame = cv2.imread(
-                self.rgb_files[self.frame_idx]
+                self.rgb_files[rgb_idx]
             )
+
             depth_frame = cv2.imread(
-                self.depth_files[self.frame_idx],
+                self.depth_files[depth_idx],
                 cv2.IMREAD_UNCHANGED
             )
-           
-            pose = self.pose_data[self.frame_idx]
+
+            if rgb_frame is None:
+                raise ValueError(
+                    f"Could not read RGB frame: {self.rgb_files[rgb_idx]}"
+                )
+
+            if depth_frame is None:
+                raise ValueError(
+                    f"Could not read depth frame: {self.depth_files[depth_idx]}"
+                )
+
+            if depth_frame.shape[:2] != rgb_frame.shape[:2]:
+                depth_frame = cv2.resize(
+                    depth_frame,
+                    (rgb_frame.shape[1], rgb_frame.shape[0]),
+                    interpolation=cv2.INTER_NEAREST
+                )
+
+            pose = self.pose_data[pose_idx]
 
             slam_dict = {
-                "rgb" : rgb_frame,
-                "depth" : depth_frame,
-                "pose" : pose,
+                "rgb": rgb_frame,
+                "depth": depth_frame,
+                "pose": pose,
             }
 
             self.frame_idx += 1
+
+
 
             return True, rgb_frame, slam_dict
 
@@ -271,6 +386,12 @@ class SamWorld:
             return False
 
         self.frame_count += 1
+
+        # yolo_results = self.yolo_model.predict(
+        #     frame,
+        #     conf=0.7,
+        #     verbose=False
+        # )
 
         # Only run SAM every SAM_STEP frames
         if self.frame_count % self.SAM_STEP != 0:
@@ -297,13 +418,11 @@ class SamWorld:
             prev_cur_frames =  self.prev_gpt_call["frame"], frame 
             prev_cur_pos = self.prev_gpt_call["position"], pose
 
-            self.run_gpt = should_reprompt(prev_cur_frames, prev_cur_pos)
+            self.run_gpt, _, _ = should_reprompt(prev_cur_frames, prev_cur_pos)
 
             if self.run_gpt == True:
                 self.prev_gpt_call["frame"] = frame
                 self.prev_gpt_call["position"] = pose
-
-            # self.run_gpt = False
 
         # Run LLM if significant change detected or first frame
         if self.run_gpt:
@@ -313,10 +432,13 @@ class SamWorld:
                 list(self.vocabulary)
             )
             print(self.sam_labels)
+
+
         full_labels = (
             self.DEFAULT_LABELS +
             self.sam_labels
         )
+
 
         self.vocabulary.update(self.sam_labels)
 
@@ -337,7 +459,7 @@ class SamWorld:
             # Results object
             cls_id = int(box.cls[0])
             label = result.names[cls_id]
-
+            confidence = float(box.conf[0])
             mask = result.masks.data[i]
             mask = mask.cpu().numpy()
 
@@ -349,7 +471,7 @@ class SamWorld:
 
             world_pos, image_pos = object_pose
 
-            object_poses_buf.append((image_pos, world_pos))
+            object_poses_buf.append((image_pos, world_pos, confidence))
 
             segmented_rgb = frame.copy()
             segmented_rgb[mask == 0] = 0
@@ -384,7 +506,8 @@ class SamWorld:
                         img_embedding,
                         node_id,
                         segmented_rgb,
-                        world_pos if slam_dict else None
+                        world_pos,
+                        confidence
                     )
 
                     # cv2.imshow("NEWOBJECT", segmented_rgb)
@@ -413,7 +536,8 @@ class SamWorld:
                     img_embedding,
                     node_id,
                     segmented_rgb,
-                    world_pos if slam_dict else None
+                    world_pos,
+                    confidence
                 )
 
         self.cluster()
@@ -437,9 +561,9 @@ class SamWorld:
         plt.pause(0.1)
         plt.draw()
 
-        for ((cx, cy), world_pos) in object_poses_buf:
-
+        for ((cx, cy), world_pos, confidence) in object_poses_buf:
             world_x, world_y, world_z = world_pos
+
             cv2.circle(
                 annotated,
                 (int(cx), int(cy)),
@@ -447,6 +571,7 @@ class SamWorld:
                 (0, 0, 0),
                 -1
             )
+
             cv2.putText(
                 annotated,
                 f"{world_x:.2f}, {world_y:.2f}, {world_z:.2f}",
@@ -455,7 +580,7 @@ class SamWorld:
                 0.5,
                 (0, 0, 0),
                 2
-            )
+    )
 
         # Display the annotated frame
         cv2.imshow("SAM3 Video", annotated)
@@ -486,12 +611,14 @@ class SamWorld:
 if __name__ == "__main__":
 
     # world = SamWorld("assets/challenge_video.mp4")
-    world = SamWorld(
-        r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"
-    )
+    # world = SamWorld(
+    #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"
+    # )
     # world = SamWorld(
     #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam"
     # )
+    # world = SamWorld(r"D:\forest_data")
+    world = SamWorld(r"D:\kab3_data")
 
 
     try:
@@ -504,7 +631,9 @@ if __name__ == "__main__":
         print("Saving graph...")
 
     except Exception as e:
+        print(type(e).__name__)
         print(e)
+        traceback.print_exc()
 
     finally:
 

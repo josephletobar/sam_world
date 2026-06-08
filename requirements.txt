@@ -6,3 +6,6 @@ torch
 torchvision
 numpy
 pillow
+transformers
+accelerate
+ollama

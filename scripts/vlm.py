@@ -6,6 +6,8 @@ import time
 import cv2
 import base64
 import spacy
+import json
+
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -30,39 +32,35 @@ Return ONLY:
 """
 
 OPEN_AI_VLM_PROMPT = """
-Return ONLY a valid Python list of concise semantic segmentation labels.
+Return ONLY valid JSON.
 
-Existing vocabulary:
-{vocabulary}
+{{
+    "scene": "...",
+    "landmarks": [...]
+}}
 
-Candidate labels from a vision model (optional):
-{vlm_out}
+scene:
+- maximum 2 words
+- describe the overall environment
 
-If candidate labels are provided:
-- Merge synonyms and near-duplicates
-- Remove labels already present in the vocabulary
-- Keep only labels relevant to search and rescue
+landmarks:
+- physical objects only
+- objects a human operator would naturally reference later
+- use descriptive names when visible
 
-Rules:
-- Maximum 8 labels
-- Lowercase only
-- No explanation
-- No numbering
-- No sentences
-- If a label is already present in the existing vocabulary, or is a close synonym / near-duplicate of an existing label, DO NOT repeat it, merge them into one if it appears. 
+- prefer vehicles, equipment, machinery, people, tools, signs, structures, barriers, and other identifiable objects
 
-- Identify every distinct object visible in the scene. Be exhaustive with objects whenever they can be recognized with reasonable confidence. Output object names only.
-- Prefer discrete, distinguishable entities that can be individually localized or tracked
-- Avoid broad background regions or generic structural surfaces unless they are mission-relevant obstacles or landmarks
-- Do NOT include generic surfaces like "wall", "floor", "ceiling", or "room" unless uniquely important to navigation or hazard assessment
-- ONLY include entities directly visible in the provided image
-- Prefer concrete physical entities over abstract scene descriptions
-- Include obstacles, access points, debris, vehicles, infrastructure, and survivors when visible
-- Avoid vague labels like "object", "area", or "environment"
-- Prioritize labels that improve navigation, localization, scene understanding, or rescue decision-making
+- do not include terrain, vegetation, roads, pavement, markings, textures, walls, floors, ceilings, or other background elements
 
-Example:
-["sidewalk", "building", "sign", "person"]
+- do not include ordinary natural objects unless unusually distinctive
+
+- return [] if no useful reference objects are visible
+
+Do not include small environmental features that are unlikely to be intentionally referenced by a human operator.
+
+Only include objects directly visible in the image.
+
+Return ONLY valid JSON.
 """
 
 
@@ -100,8 +98,15 @@ class OpenAIClient:
             ]
         )
 
-        sam_labels = ast.literal_eval(
-            response.output_text
+        print(response.output_text)
+
+        response_dict = json.loads(response.output_text)
+
+        print(response_dict)
+
+        sam_labels = response_dict.get(
+            "landmarks",
+            []
         )
 
         return sam_labels

@@ -15,8 +15,12 @@ model = AutoModel.from_pretrained("facebook/dinov2-base").cuda().eval()
 # image_dir = Path(r"C:\Windows\System32\forest_frames\zed2i_left_images")
 
 image_dir = Path(r"C:\Users\jleto\Downloads\rgbd_dataset_freiburg1_xyz\rgbd_dataset_freiburg1_xyz\rgb")
+image_dir = Path(r"D:\forest_frames\zed2i_left_images")
 
-img_paths = sorted(image_dir.glob("*.png"))
+img_paths = sorted(
+    p for p in image_dir.glob("*.jpeg")
+    if not p.name.startswith("._")
+)
 
 for img_path in img_paths:
 

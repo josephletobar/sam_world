@@ -1,70 +1,44 @@
-import cv2
-import torch
+import time
 from pathlib import Path
-from PIL import Image
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import ollama
 
-# image_dir = Path(r"C:\Windows\System32\forest_frames\zed2i_left_images")
+MODEL = "qwen2.5vl:3b"
+# MODEL = "minicpm-v"
 
-image_dir = Path(
-    r"C:\Users\jleto\Downloads\rgbd_dataset_freiburg1_xyz\rgbd_dataset_freiburg1_xyz\rgb"
-)
+PROMPT = "What is in this image? One sentence."
 
-print("Loading Moondream...")
+image_dir = Path(r"D:\kab3_data\rgb")
 
-model = AutoModelForCausalLM.from_pretrained(
-    "vikhyatk/moondream2",
-    trust_remote_code=True,
-    torch_dtype=torch.float16,
-    device_map="auto"
-)
+latencies = []
 
-tokenizer = AutoTokenizer.from_pretrained(
-    "vikhyatk/moondream2",
-    trust_remote_code=True
-)
+for img_path in sorted(image_dir.glob("*")):
 
-img_paths = sorted(image_dir.glob("*.png"))
+    t0 = time.time()
 
-for frame_idx, img_path in enumerate(img_paths):
+    response = ollama.chat(
+        model=MODEL,
+        messages=[
+            {
+                "role": "user",
+                "content": PROMPT,
+                "images": [str(img_path)]
+            }
+        ],
+        options={
+            "temperature": 0,
+            "num_predict": 5
+        }
+    )
 
-    img = cv2.imread(str(img_path))
-    if img is None:
-        continue
+    dt = time.time() - t0
+    latencies.append(dt)
 
-    cv2.imshow("RGB", img)
+    print("\n========================")
+    print(img_path.name)
+    print("Model:", MODEL)
+    print("Latency:", round(dt, 2), "sec")
+    print("Average:", round(sum(latencies) / len(latencies), 2), "sec")
+    print(response["message"]["content"])
 
-    if frame_idx % 30 == 0:
-
-        image = Image.open(img_path).convert("RGB")
-
-        answer = model.query(
-            image,
-            """
-Describe this image hierarchically.
-
-Include:
-- Environment
-- Regions
-- Terrain
-- Objects
-- Structures
-- Landmarks
-
-Return a concise tree structure.
-"""
-        )["answer"]
-
-        print("\n" + "=" * 80)
-        print(f"Frame {frame_idx}")
-        print(img_path.name)
-        print(answer)
-
-    key = cv2.waitKey(30) & 0xFF
-
-    if key == ord("q"):
+    if len(latencies) >= 20:
         break
-    elif key == ord(" "):
-        cv2.waitKey(0)
-
-cv2.destroyAllWindows()
