@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from dataclasses import dataclass
+from ultralytics.models.sam import SAM3SemanticPredictor
 
 from utils import association
 from utils.get_obj_pos import get_pos
@@ -22,8 +23,18 @@ class WorldObject:
     node_id: str = None
 
 class ObjectPerception:
-    def __init__(self, sam_predictor):
-        self.sam_predictor = sam_predictor
+    def __init__(self):
+
+        overrides = dict(
+            conf=0.8,
+            task="segment",
+            mode="predict",
+            model="models/sam3.pt",
+            save=False,
+        )
+
+        self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
+
         self.first_frame = True
 
     def get_objects(self, frame, labels, slam_dict):

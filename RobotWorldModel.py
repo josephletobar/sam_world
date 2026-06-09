@@ -1,22 +1,10 @@
-from cProfile import label
 import os
 import cv2
 import numpy as np
 import traceback
-import networkx as nx
-import matplotlib
 
-from modules.GraphBuilder import GraphBuilder
-matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
-
-from ultralytics.models.sam import SAM3SemanticPredictor
-from mpl_toolkits.mplot3d import Axes3D
-
-from utils.get_obj_pos import get_pos
-from utils.clip_embedding import embed_image, embed_text
 from utils.association import association
-
+from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.SceneDiff import SceneDifferenceDetector
@@ -26,31 +14,13 @@ from modules.ObjectPerception import ObjectPerception
 class RobotWorldModel:
 
     def __init__(self, source):
-
-        # VIDEO
-        if source.endswith(".mp4"):
-            self.source_type = "video"
-            self.cap = cv2.VideoCapture(source)
-
-        # SLAM STREAM DIR
-        else:
-            self.source_type = "slam stream"
-            self.load_slam_data(source)
-            self.frame_idx = 0
-
-        # SAM3 Setup
-        overrides = dict(
-            conf=0.8,
-            task="segment",
-            mode="predict",
-            model="models/sam3.pt",
-            save=False,
-        )
+        self.load_slam_data(source)
+        self.frame_idx = 0        
 
         self.scene_diff_detector = SceneDifferenceDetector()
         self.scene_understanding = SceneUnderstanding(client="openai")
         self.priority_object_detector = PriorityObjectDetector()
-        self.object_perception = ObjectPerception(sam_predictor=SAM3SemanticPredictor(overrides=overrides))
+        self.object_perception = ObjectPerception()
         self.graph_builder = GraphBuilder()
 
         self.DEFAULT_LABELS = [
@@ -60,9 +30,10 @@ class RobotWorldModel:
         # Global object storage
         self.global_objects = []
 
-        self.frame_count = 0 # frame tracking
+        self.yolo_boxes = None
 
     def load_slam_data(self, source):
+
         self.rgb_files = sorted(
             os.path.join(source, "rgb", f)
             for f in os.listdir(os.path.join(source, "rgb"))
@@ -105,10 +76,6 @@ class RobotWorldModel:
 
         if len(self.pose_data) == 0:
             raise ValueError("No poses found")
-
-        rgb_count = len(self.rgb_files)
-        depth_count = len(self.depth_files)
-        pose_count = len(self.pose_data)
 
         # load timestamps
         rgb_ts_path = os.path.join(source, "rgb.txt")
@@ -178,88 +145,85 @@ class RobotWorldModel:
         )
 
     def get_next_frame(self):
-        if self.source_type == "video":
-            ret, frame = self.cap.read()
-            return ret, frame, None
 
-        elif self.source_type == "slam stream":
+        if self.frame_idx >= len(self.rgb_files):
+            return False, None, None
 
-            if self.frame_idx >= len(self.rgb_files):
-                return False, None, None
+        rgb_idx = self.frame_idx
+        depth_idx = self.rgb_to_depth[rgb_idx]
+        pose_idx = self.rgb_to_pose[rgb_idx]
 
-            rgb_idx = self.frame_idx
-            depth_idx = self.rgb_to_depth[rgb_idx]
-            pose_idx = self.rgb_to_pose[rgb_idx]
+        rgb_frame = cv2.imread(
+            self.rgb_files[rgb_idx]
+        )
 
-            rgb_frame = cv2.imread(
-                self.rgb_files[rgb_idx]
+        depth_frame = cv2.imread(
+            self.depth_files[depth_idx],
+            cv2.IMREAD_UNCHANGED
+        )
+
+        if rgb_frame is None:
+            raise ValueError(
+                f"Could not read RGB frame: {self.rgb_files[rgb_idx]}"
             )
 
-            depth_frame = cv2.imread(
-                self.depth_files[depth_idx],
-                cv2.IMREAD_UNCHANGED
+        if depth_frame is None:
+            raise ValueError(
+                f"Could not read depth frame: {self.depth_files[depth_idx]}"
             )
 
-            if rgb_frame is None:
-                raise ValueError(
-                    f"Could not read RGB frame: {self.rgb_files[rgb_idx]}"
-                )
+        if depth_frame.shape[:2] != rgb_frame.shape[:2]:
+            depth_frame = cv2.resize(
+                depth_frame,
+                (rgb_frame.shape[1], rgb_frame.shape[0]),
+                interpolation=cv2.INTER_NEAREST
+            )
 
-            if depth_frame is None:
-                raise ValueError(
-                    f"Could not read depth frame: {self.depth_files[depth_idx]}"
-                )
+        pose = self.pose_data[pose_idx]
 
-            if depth_frame.shape[:2] != rgb_frame.shape[:2]:
-                depth_frame = cv2.resize(
-                    depth_frame,
-                    (rgb_frame.shape[1], rgb_frame.shape[0]),
-                    interpolation=cv2.INTER_NEAREST
-                )
+        slam_dict = {
+            "rgb": rgb_frame,
+            "depth": depth_frame,
+            "pose": pose,
+        }
 
-            pose = self.pose_data[pose_idx]
+        self.frame_idx += 1
 
-            slam_dict = {
-                "rgb": rgb_frame,
-                "depth": depth_frame,
-                "pose": pose,
-            }
+        return True, rgb_frame, slam_dict
+    
+    def show_video(self, frame):
 
-            self.frame_idx += 1
-
-            return True, rgb_frame, slam_dict
-
-    def draw_yolo_boxes(self, frame, yolo_boxes):
-        if yolo_boxes is None:
-            return frame
         annotated = frame.copy()
-        for box in yolo_boxes:
-            x1, y1, x2, y2 = box.xyxy[0].detach().cpu().numpy().astype(int)
-            cv2.rectangle(
-                annotated,
-                (x1, y1),
-                (x2, y2),
-                (0, 255, 255),
-                2
-            )
-        return annotated
+
+        if self.yolo_boxes is not None:
+            for box in self.yolo_boxes:
+                x1, y1, x2, y2 = box.xyxy[0].detach().cpu().numpy().astype(int)
+
+                cv2.rectangle(
+                    annotated,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 255),
+                    2
+                )
+
+        cv2.imshow("Video", annotated)
+        cv2.waitKey(1)
 
     def run(self):
 
         ret, frame, slam_dict = self.get_next_frame()
-        pose = slam_dict["pose"]
-        depth = slam_dict["depth"]
-
+    
         if not ret:
             return False
-
-        self.frame_count += 1
+        
+        pose = slam_dict["pose"]
 
         priority_objects = self.priority_object_detector.detect(frame)
         if len(priority_objects) > 0:
             print("PRIORITY OBJECTS DETECTED:", priority_objects)
             self.vocabulary.update(priority_objects)
-        yolo_boxes = self.priority_object_detector.yolo_boxes
+        self.yolo_boxes = self.priority_object_detector.yolo_boxes
 
         # Detect scene changes and get YOLO boxes
         scene_changed = self.scene_diff_detector.should_reprompt(frame, pose)
@@ -278,8 +242,7 @@ class RobotWorldModel:
             self.vocabulary.update(self.sam_labels)
 
             if len(full_labels) == 0:
-                cv2.imshow("Video", self.draw_yolo_boxes(frame, yolo_boxes))
-                cv2.waitKey(1)
+                self.show_video(frame)
                 return True
             
             objects, annotated = self.object_perception.get_objects(frame, full_labels, slam_dict)
@@ -320,9 +283,7 @@ class RobotWorldModel:
             )
 
             # Display the annotated frame
-            annotated = self.draw_yolo_boxes(annotated, yolo_boxes)
-            cv2.imshow("Video", annotated)
-            cv2.waitKey(1)
+            self.show_video(annotated)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
 
@@ -334,8 +295,7 @@ class RobotWorldModel:
 
             return True
         
-        cv2.imshow("Video", self.draw_yolo_boxes(frame, yolo_boxes))
-        cv2.waitKey(1)
+        self.show_video(frame)
         return True
         
 
