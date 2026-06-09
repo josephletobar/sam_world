@@ -1,8 +1,7 @@
 from turtle import pos
 
 import cv2
-from ultralytics import YOLOWorld
-from scripts.clip_embedding import embed_image
+from utils.clip_embedding import embed_image
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.transform import Rotation as R
 import numpy as np
@@ -26,39 +25,7 @@ class SceneDifferenceDetector:
 
         self.prev_frame = None
         self.prev_pos = None
-
-        self.model = YOLOWorld("yolov8x-worldv2.pt")
-        self.model.set_classes([
-            "person",
-            "vehicle",
-            "backpack",
-            "dog"
-        ])
-        self.prev_yolo_labels = None
-        self.yolo_boxes = None
-
-    def _yolo_diff(self, frame):
-        
-        yolo_objs = self.model.predict(
-            frame,
-            conf=0.8,
-            verbose=False
-        )
-        labels = {
-            yolo_objs[0].names[int(box.cls)]
-            for box in yolo_objs[0].boxes
-        }
-
-        self.yolo_boxes = yolo_objs[0].boxes
-
-        yolo_feature = 1.0 if self.prev_yolo_labels != labels  else 0.0
-        if yolo_feature == 1.0: 
-            self.prev_yolo_labels = labels
-            print("YOLO DIFF DETECTED")
-            return True
-        else: 
-            self.prev_yolo_labels = labels
-            return False
+    
         
     def _semantic_diff(self, frame):
 
@@ -124,11 +91,6 @@ class SceneDifferenceDetector:
             self.prev_frame = frame
             self.prev_pos = pos
             return True     
-
-        if self._yolo_diff(frame):
-            self.prev_frame = frame
-            self.prev_pos = pos
-            return True
         
         # Get Feature Deltas
         semantic_delta = self._semantic_diff(frame)

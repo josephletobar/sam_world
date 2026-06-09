@@ -21,6 +21,7 @@ from utils.association import association
 from modules.GraphChat import ChatWithGraph
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.SceneDiff import SceneDifferenceDetector
+from modules.PriorityObjectDetector import PriorityObjectDetector
 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection="3d")
@@ -45,7 +46,7 @@ class RobotWorldModel:
             conf=0.8,
             task="segment",
             mode="predict",
-            model="sam3.pt",
+            model="models/sam3.pt",
             save=False,
         )
         self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
@@ -54,6 +55,7 @@ class RobotWorldModel:
 
         self.scene_diff_detector = SceneDifferenceDetector()
         self.scene_understanding = SceneUnderstanding(client="openai")
+        self.priority_object_detector = PriorityObjectDetector()
 
 
         # Graph SETUP
@@ -408,6 +410,12 @@ class RobotWorldModel:
 
         self.frame_count += 1
 
+        priority_objects = self.priority_object_detector.detect(frame)
+        if len(priority_objects) > 0:
+            print("PRIORITY OBJECTS DETECTED:", priority_objects)
+            self.vocabulary.update(priority_objects)
+        yolo_boxes = self.priority_object_detector.yolo_boxes
+
 
 
         # # Only run SAM every SAM_STEP frames
@@ -420,7 +428,6 @@ class RobotWorldModel:
 
         # Detect scene changes and get YOLO boxes
         self.run_gpt = self.scene_diff_detector.should_reprompt(frame, pose)
-        yolo_boxes = self.scene_diff_detector.yolo_boxes
 
         # Run VLM and SAM if significant change detected or first frame
         if self.run_gpt:
@@ -625,15 +632,15 @@ class RobotWorldModel:
 
 if __name__ == "__main__":
 
-    # world = SamWorld("assets/challenge_video.mp4")
-    # world = SamWorld(
+    # world = RobotWorldModel("assets/challenge_video.mp4")
+    # world = RobotWorldModel(
     #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"
     # )
-    # world = SamWorld(
+    # world = RobotWorldModel(
     #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam"
     # )
-    # world = SamWorld(r"D:\forest_data")
-    world = SamWorld(r"D:\kab3_data")
+    # world = RobotWorldModel(r"D:\forest_data")
+    world = RobotWorldModel(r"D:\kab3_data")
 
 
     try:

@@ -1,5 +1,5 @@
 from openai import OpenAI
-from scripts.clip_embedding import embed_text
+from utils.clip_embedding import embed_text
 import numpy as np
 import json
 from dotenv import find_dotenv, load_dotenv
