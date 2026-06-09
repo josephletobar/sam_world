@@ -1,10 +1,18 @@
 from sklearn.metrics.pairwise import cosine_similarity
 import cv2
 import numpy as np
+from modules.ObjectPerception import WorldObject
 
-def association(new_data, all_data):
-    node_id, embedding, segmented, pose = new_data
-    node_ids, embedding_matrix, segmented_objs, poses = all_data
+SIM_THRESHOLD = 0.8
+
+def association(new_object: WorldObject, world_objects: list[WorldObject]):
+    embedding = new_object.img_embedding
+    segmented = new_object.segmented_rgb
+    pose = new_object.world_pos
+
+    embedding_matrix = [obj.img_embedding for obj in world_objects]
+    segmented_objs = [obj.segmented_rgb for obj in world_objects]
+    poses = [obj.world_pos for obj in world_objects]
 
     if len(embedding_matrix) == 0:
         return None, None, None
@@ -66,7 +74,13 @@ def association(new_data, all_data):
 
     best_prob = probabilities[best_idx]
 
-    best_node_id = node_ids[best_idx]
+    if best_prob < SIM_THRESHOLD:
+        node_id = f"{new_object.label}_{sum(1 for obj in world_objects if obj.label == new_object.label)}"
+
+        return True, node_id
+    else:
+        return False, None
+
 
     # if best_prob > 0.8:
     # print("\n========== BEST MATCH DEBUG ==========")
@@ -98,10 +112,6 @@ def association(new_data, all_data):
     # cv2.waitKey(0)
     # cv2.destroyWindow("MATCHES")
 
-    return (
-        best_prob,
-        best_node_id,
-        best_idx
-    )
+    
 
 

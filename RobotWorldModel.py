@@ -1,3 +1,4 @@
+from cProfile import label
 import os
 import json
 import cv2
@@ -12,7 +13,6 @@ import matplotlib.pyplot as plt
 from ultralytics.models.sam import SAM3SemanticPredictor
 from sklearn.cluster import DBSCAN
 from mpl_toolkits.mplot3d import Axes3D
-from ultralytics import YOLOWorld
 
 from utils.get_obj_pos import get_pos
 from utils.clip_embedding import embed_image, embed_text
@@ -22,6 +22,7 @@ from modules.GraphChat import ChatWithGraph
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.SceneDiff import SceneDifferenceDetector
 from modules.PriorityObjectDetector import PriorityObjectDetector
+from modules.ObjectPerception import ObjectPerception
 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection="3d")
@@ -49,14 +50,11 @@ class RobotWorldModel:
             model="models/sam3.pt",
             save=False,
         )
-        self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
-
-        self.yolo_model = YOLOWorld("yolov8x-worldv2.pt")
 
         self.scene_diff_detector = SceneDifferenceDetector()
         self.scene_understanding = SceneUnderstanding(client="openai")
         self.priority_object_detector = PriorityObjectDetector()
-
+        self.object_perception = ObjectPerception(sam_predictor=SAM3SemanticPredictor(overrides=overrides))
 
         # Graph SETUP
         self.G = nx.Graph()
@@ -65,7 +63,6 @@ class RobotWorldModel:
         # Set Constants/Thresholds
         self.SAM_STEP = 5
         self.CHANGE_STEP = 5
-        self.SIM_THRESHOLD = 0.8
         self.DIFF_TRESHOLD = 0.75
 
         self.DEFAULT_LABELS = [
@@ -80,16 +77,8 @@ class RobotWorldModel:
             "position" : None
         }
 
-        # In memory storage (index alligned)
-        self.labels = []
-        self.embedding_matrix = [] # img embeddings
-        self.segmented_rgbs = [] # rgb images
-        self.world_poses = [] 
-
-        self.segmented_depths = [] # depth channel
-        self.poses = [] # depth channel
-
-        self.label_counts = {}
+        # Global object storage
+        self.global_objects = []
 
         self.frame_count = 0 # frame tracking
 
@@ -209,60 +198,42 @@ class RobotWorldModel:
         )
 
     # Adds to Graph and updates memories
-    def add_object(
-        self,
-        txt_embedding,
-        img_embedding,
-        node_id,
-        img,
-        world_pos,
-        confidence,
-    ):
+    def add_object(self, obj):
 
         print("--NEW OBJECT--")
 
-        self.embedding_matrix.append(img_embedding)
-        self.labels.append(node_id)
-        self.segmented_rgbs.append(img)
-
-        self.world_poses.append(world_pos)
-
-        world_x, world_y, world_z = world_pos
-
+        world_x, world_y, world_z = obj.world_pos
 
         self.G.add_node(
-            node_id,
+            obj.node_id,
             world_x=float(world_x),
             world_y=float(world_y),
             world_z=float(world_z),
-            txt_embedding=txt_embedding.tolist(),
-            img_embedding=img_embedding,
-            confidence=confidence
+            txt_embedding=obj.txt_embedding.tolist(),
+            img_embedding=obj.img_embedding,
+            confidence=obj.confidence
         )
 
-        self.pos[node_id] = (
+        self.pos[obj.node_id] = (
             world_x,
             world_z
         )
 
-        for other_id, other_pos in zip(
-            self.labels,
-            self.world_poses
-        ):
-            if node_id != other_id: 
-                dist = np.linalg.norm(
-                    np.array(world_pos) -
-                    np.array(other_pos)
-                )
+        for other_obj in self.global_objects:
+            if other_obj.node_id == obj.node_id:
+                continue
 
-                self.G.add_edge(
-                    node_id,
-                    other_id,
-                    weight=round(dist, 2)
-                )
+            dist = np.linalg.norm(
+                np.array(obj.world_pos) -
+                np.array(other_obj.world_pos)
+            )
 
-    
-    
+            self.G.add_edge(
+                obj.node_id,
+                other_obj.node_id,
+                weight=round(dist, 2)
+            )
+
     def draw_graph(self):
 
         threshold_graph = nx.Graph(
@@ -416,8 +387,6 @@ class RobotWorldModel:
             self.vocabulary.update(priority_objects)
         yolo_boxes = self.priority_object_detector.yolo_boxes
 
-
-
         # # Only run SAM every SAM_STEP frames
         # if self.frame_count % self.SAM_STEP != 0:
         #     return True
@@ -427,157 +396,60 @@ class RobotWorldModel:
         yolo_boxes = None
 
         # Detect scene changes and get YOLO boxes
-        self.run_gpt = self.scene_diff_detector.should_reprompt(frame, pose)
+        scene_changed = self.scene_diff_detector.should_reprompt(frame, pose)
 
         # Run VLM and SAM if significant change detected or first frame
-        if self.run_gpt:
+        if scene_changed:
             print("--- VLM RAN ---")
-
-            self.scene_understanding.get_labels(frame, self.vocabulary)
 
             self.sam_labels = self.scene_understanding.get_labels(frame, self.vocabulary)
 
             print(self.sam_labels)
-
             full_labels = (
                 self.DEFAULT_LABELS +
                 self.sam_labels
             )
-
             self.vocabulary.update(self.sam_labels)
 
             if len(full_labels) == 0:
                 cv2.imshow("Video", self.draw_yolo_boxes(frame, yolo_boxes))
                 cv2.waitKey(1)
                 return True
-
-            # Run SAM3 with the combined labels
-            results = self.sam_predictor(
-                frame,
-                text=full_labels,
-                # imgsz=448,
-                save=False,
-                verbose=False
-            )
-            result = results[0]
-            annotated = result.plot()
-
-            if result.boxes is None or len(result.boxes) == 0:
-                print("No detections")
-                cv2.imshow("Video", self.draw_yolo_boxes(frame, yolo_boxes))
-                cv2.waitKey(1)
-                return True
-
-            # Add Detected Labels to Knowledge Graph
-            object_poses_buf = []
-            for i, box in enumerate(result.boxes):
-                # Results object
-                cls_id = int(box.cls[0])
-                label = result.names[cls_id]
-                confidence = float(box.conf[0])
-                mask = result.masks.data[i]
-                mask = mask.cpu().numpy()
-
-                # Find objects position
-                ys, xs = np.where(mask > 0.5)
-
-                object_pose = get_pos(mask, depth, pose)
-                if object_pose is None: continue
-
-                world_pos, image_pos = object_pose
-
-                object_poses_buf.append((image_pos, world_pos, confidence))
-
-                segmented_rgb = frame.copy()
-                segmented_rgb[mask == 0] = 0
-                segmented_rgb = segmented_rgb[
-                    ys.min():ys.max(),
-                    xs.min():xs.max()
-                ]
-
-                img_embedding = embed_image(segmented_rgb)
-                txt_embedding = embed_text(label)
-
-                # Object Association
-                new_data = (label, img_embedding, segmented_rgb, world_pos if slam_dict else None)
-                all_data = (self.labels, self.embedding_matrix, self.segmented_rgbs, self.world_poses if slam_dict else None)
-
-                if len(self.embedding_matrix) > 0:
-
-                    best_prob, best_id, best_idx = association(new_data, all_data)
             
-                    # New Node
-                    # print("-------")
-                    # print(best_prob)
-                    # print("-------")
-                    if best_prob < self.SIM_THRESHOLD:
+            objects, annotated = self.object_perception.get_objects(frame, full_labels, slam_dict)
 
-                        count = self.label_counts.get(label, 0)
-                        node_id = f"{label}_{count}"
-                        self.label_counts[label] = count + 1
+            if len(self.global_objects) > 0:
+            
+                for object in objects:
+                    different, object.node_id = association(new_object=object, world_objects=self.global_objects)
 
-                        self.add_object(
-                            txt_embedding,
-                            img_embedding,
-                            node_id,
-                            segmented_rgb,
-                            world_pos,
-                            confidence
-                        )
+                    if different:
+                        self.global_objects.append(object)
+                        self.add_object(object)
 
-                        # cv2.imshow("NEWOBJECT", segmented_rgb)
-                        # cv2.waitKey(0)
-                        # cv2.destroyWindow("NEWOBJECT")
-                    
-                    else: # Existing Node
-                        # Merge Nodes
-
-                        # # debug to visualize the matched objects
-                        # print(best_prob)
-                        # cv2.imshow("match1", segmented)
-                        # cv2.imshow("match2", self.segmented_rgbs[best_idx])
-                        # cv2.waitKey(0)
-                        # cv2.destroyAllWindows()
+                    elif not different:
+                        # Merge Nodes (skip for now)
                         pass
 
-                # First Node
-                else:
-                    count = self.label_counts.get(label, 0)
-                    node_id = f"{label}_{count}"
-                    self.label_counts[label] = count + 1
-
-                    self.add_object(
-                        txt_embedding,
-                        img_embedding,
-                        node_id,
-                        segmented_rgb,
-                        world_pos,
-                        confidence
-                    )
+            else:
+                for obj in objects:
+                    obj.node_id = f"{obj.label}_{sum(1 for o in self.global_objects if o.label == obj.label)}"
+                    self.global_objects.append(obj)
+                    self.add_object(obj)
 
             self.cluster()
 
             # Display graph using NetworkX and Matplotlib
             plt.clf()
 
-            # mst = nx.minimum_spanning_tree(self.G, weight="weight")
-            # edge_labels = nx.get_edge_attributes(mst, "weight")
-
-            # nx.draw(mst, self.pos, with_labels=True, node_size=1000)
-
-            # nx.draw_networkx_edge_labels(
-            #     mst,
-            #     self.pos,
-            #     edge_labels=edge_labels
-            # )
-
             self.draw_graph()
 
             plt.pause(0.1)
             plt.draw()
 
-            for ((cx, cy), world_pos, confidence) in object_poses_buf:
-                world_x, world_y, world_z = world_pos
+            for obj in objects:
+                cx, cy = obj.image_pos
+                world_x, world_y, world_z = obj.world_pos
 
                 cv2.circle(
                     annotated,
@@ -602,9 +474,6 @@ class RobotWorldModel:
             cv2.imshow("Video", annotated)
             cv2.waitKey(1)
 
-            # cv2.waitKey(0)
-            # cv2.destroyWindow("SAM3 Video")
-
             if cv2.waitKey(1) & 0xFF == ord("q"):
 
                 final_graph = self.draw_graph()
@@ -627,8 +496,6 @@ class RobotWorldModel:
         cv2.waitKey(1)
         return True
         
-    
-
 
 if __name__ == "__main__":
 
