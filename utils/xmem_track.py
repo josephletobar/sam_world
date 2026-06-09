@@ -1,24 +1,18 @@
-from ultralytics.models.sam import SAM3SemanticPredictor
-import cv2
-import numpy as np
+import sys
 from pathlib import Path
 
+import cv2
+import numpy as np
 import torch
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
+from ultralytics.models.sam import SAM3SemanticPredictor
 
-import sys
 sys.path.append(r"C:\Users\jletobar3\Projects\XMem")
 from inference.inference_core import InferenceCore
-from model.network import XMem
 from inference.interact.interactive_utils import image_to_torch
+from model.network import XMem
 
 
-config = {
+CONFIG = {
     "mem_every": 20,
     "deep_update_every": -1,
     "enable_long_term": True,
@@ -28,115 +22,211 @@ config = {
     "max_long_term_elements": 1000,
     "num_prototypes": 128,
     "top_k": 30,
-    "num_objects": 1,
+    "num_objects": 20,
 }
 
-network = XMem(config=config, model_path="XMem.pth").to(device).eval()
+PALETTE = np.array([
+    (255, 0, 0),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 255, 0),
+    (255, 0, 255),
+    (0, 255, 255),
+    (128, 0, 255),
+    (255, 128, 0),
+], dtype=np.uint8)
 
-inference = InferenceCore(network=network, config=config)
-inference.set_all_labels([1])
 
-overrides = dict(
-    conf=0.25,
-    task="segment",
-    mode="predict",
-    model="sam3.pt",
-    half=True,
-    save=False,
-)
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
-predictor = SAM3SemanticPredictor(overrides=overrides)
 
-image_dir = Path(r"D:\kab3_data\rgb")
-image_paths = sorted(image_dir.glob("*"))
+class TrackObject:
+    def __init__(
+        self,
+        xmem_model_path="models/XMem.pth",
+        sam_model_path="models/sam3.pt",
+        config=None,
+        resize_to=(640, 480),
+        device=None,
+    ):
+        self.device = device or get_device()
+        self.config = dict(CONFIG if config is None else config)
+        self.resize_to = resize_to
+        self.initialized = False
 
-# Disable gradient computation for inference
-torch.set_grad_enabled(False)
+        network = XMem(
+            config=self.config,
+            model_path=xmem_model_path
+        ).to(self.device).eval()
 
-# ---------- FIRST FRAME ----------
-first_img = cv2.imread(str(image_paths[0]))
-first_img = cv2.resize(first_img, (640, 480))
+        self.inference = InferenceCore(
+            network=network,
+            config=self.config
+        )
 
-with torch.no_grad():
-    predictor.set_image(first_img)
-    results = predictor(text=["black car"])
+        overrides = dict(
+            conf=0.8,
+            task="segment",
+            mode="predict",
+            model=sam_model_path,
+            save=False,
+        )
+        self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
 
-    annotated = first_img.copy()
+        torch.set_grad_enabled(False)
 
-    if len(results):
-        r = results[0]
+    def _prepare_frame(self, frame):
+        if self.resize_to is None:
+            return frame
+        return cv2.resize(frame, self.resize_to)
 
-        if r.masks is not None:
-            annotated = r.plot()
+    def initialize(self, frame, labels):
+        frame = self._prepare_frame(frame)
 
-            sam3_mask = r.masks.data[0]
-            sam3_mask = sam3_mask.float().unsqueeze(0)
-            print(f"First frame - SAM3 mask shape: {sam3_mask.shape}")
+        with torch.no_grad():
+            self.sam_predictor.set_image(frame)
+            results = self.sam_predictor(text=labels)
 
-            img_torch, _ = image_to_torch(first_img, device)    
-            inference.step(img_torch, sam3_mask)
+            if not len(results) or results[0].masks is None:
+                raise ValueError("SAM3 did not find masks for the requested labels")
 
-# Clean up SAM3 predictor state
-if hasattr(predictor, 'predictor') and hasattr(predictor.predictor, 'features'):
-    predictor.predictor.features = None
-if device.type == 'cuda':
-    torch.cuda.empty_cache()
+            result = results[0]
+            sam_masks = result.masks.data.float()
+            self.inference.set_all_labels(list(range(1, sam_masks.shape[0] + 1)))
 
-cv2.imshow("Segmentation", annotated)
+            img_torch, _ = image_to_torch(frame, self.device)
+            self.inference.step(img_torch, sam_masks)
 
-# Wait for space key to start XMem tracking
-print("Press SPACE to start XMem tracking...")
-while True:
-    key = cv2.waitKey(0) & 0xFF
-    if key == 32:  # Space key
-        break
+        self.initialized = True
+        self._cleanup_sam()
 
-prev_mask = sam3_mask  # Store the initial mask for future use
+        return {
+            "annotated": result.plot(),
+            "masks": sam_masks.detach().cpu().numpy(),
+        }
 
-# ---------- REMAINING FRAMES ----------
-for frame_idx, img_path in enumerate(image_paths[1:], start=1):
+    def track(self, frame):
+        if not self.initialized:
+            raise RuntimeError("Call initialize(frame, labels) before track(frame)")
 
-    img = cv2.imread(str(img_path))
-    if img is None:
-        continue
+        frame = self._prepare_frame(frame)
 
-    img = cv2.resize(img, (640, 480))
-    
-    with torch.no_grad():
-        img_torch, _ = image_to_torch(img, device)    
-        mask = inference.step(img_torch)
-    
-    print(f"Frame {frame_idx} - Output mask shape: {mask.shape}")
+        with torch.no_grad():
+            img_torch, _ = image_to_torch(frame, self.device)
+            masks = self.inference.step(img_torch)
 
-    # Get the object mask (index 1, skipping background at index 0)
-    mask_prob = mask[1].detach().cpu().numpy()  # Range: 0-1
-    mask_prob[mask_prob < 0.9] = 0.0
-    segmented_rgb = img * ((mask_prob > 0.5)[..., None])
+        object_probs = masks[1:].detach().cpu().numpy()
+        segmented_rgbs = self.get_segmented_rgbs(frame, object_probs)
+        annotated = self.visualize(frame, object_probs)
 
-    # Create blue highlight overlay on original image
-    annotated = img.copy()
-    
-    # Threshold the mask for cleaner visualization
-    mask_binary = (mask_prob > 0.5).astype(float)
-    
-    # Create blue color (BGR format: Blue=255, Green=0, Red=0)
-    blue_overlay = np.zeros_like(img)
-    blue_overlay[:, :, 0] = 255  # Blue channel
-    
-    # Blend: where mask is high, show more blue
-    alpha = mask_prob * 0.6  # 60% opacity at mask=1
-    for c in range(3):
-        annotated[:, :, c] = (img[:, :, c] * (1 - alpha) + blue_overlay[:, :, c] * alpha).astype(np.uint8)
+        return {
+            "annotated": annotated,
+            "masks": object_probs,
+            "segmented_rgbs": segmented_rgbs,
+        }
 
-    cv2.imshow("Segmentation", annotated)
+    def get_segmented_rgbs(self, frame, object_probs, threshold=0.5):
+        segmented_rgbs = []
 
-    # Periodic memory cleanup
-    if frame_idx % 10 == 0 and device.type == 'cuda':
-        torch.cuda.empty_cache()
+        for mask_prob in object_probs:
+            mask_binary = mask_prob > threshold
 
-    if cv2.waitKey(30) & 0xFF == ord("q"):
-        break
+            if not mask_binary.any():
+                segmented_rgbs.append(None)
+                continue
 
-cv2.destroyAllWindows()
-if device.type == 'cuda':
-    torch.cuda.empty_cache()
+            segmented_rgbs.append(frame * mask_binary[..., None])
+
+        return segmented_rgbs
+
+    def visualize(self, frame, object_probs, threshold=0.5, min_prob=0.9):
+        annotated = frame.copy()
+
+        for object_idx, mask_prob in enumerate(object_probs):
+            mask_prob = mask_prob.copy()
+            mask_prob[mask_prob < min_prob] = 0.0
+            mask_binary = mask_prob > threshold
+
+            if not mask_binary.any():
+                continue
+
+            color = PALETTE[object_idx % len(PALETTE)]
+            alpha = mask_prob * 0.6
+
+            for c in range(3):
+                annotated[:, :, c] = (
+                    annotated[:, :, c] * (1 - alpha) +
+                    color[c] * alpha
+                ).astype(np.uint8)
+
+        return annotated
+
+    def _cleanup_sam(self):
+        if (
+            hasattr(self.sam_predictor, "predictor")
+            and hasattr(self.sam_predictor.predictor, "features")
+        ):
+            self.sam_predictor.predictor.features = None
+
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    def cleanup(self):
+        self._cleanup_sam()
+
+
+if __name__ == "__main__":
+    labels = ["keyboard", "monitor"]
+
+    image_dir = Path(
+        r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz\rgb"
+    )
+    image_paths = [
+        p for p in sorted(image_dir.glob("*"))
+        if not p.name.startswith("._")
+    ]
+
+    if len(image_paths) == 0:
+        raise ValueError(f"No images found in {image_dir}")
+
+    tracker = TrackObject()
+
+    first_img = cv2.imread(str(image_paths[0]))
+    if first_img is None:
+        raise ValueError(f"Could not read first image: {image_paths[0]}")
+
+    init_result = tracker.initialize(first_img, labels)
+    cv2.imshow("Segmentation", init_result["annotated"])
+
+    print("Press SPACE to start XMem tracking...")
+    while True:
+        key = cv2.waitKey(0) & 0xFF
+        if key == 32:
+            break
+
+    for frame_idx, img_path in enumerate(image_paths[1:], start=1):
+        img = cv2.imread(str(img_path))
+        if img is None:
+            continue
+
+        track_result = tracker.track(img)
+        print(
+            f"Frame {frame_idx} - "
+            f"tracked masks: {track_result['masks'].shape}"
+        )
+
+        cv2.imshow("Segmentation", track_result["annotated"])
+
+        if frame_idx % 10 == 0:
+            tracker.cleanup()
+
+        if cv2.waitKey(30) & 0xFF == ord("q"):
+            break
+
+    cv2.destroyAllWindows()
+    tracker.cleanup()
