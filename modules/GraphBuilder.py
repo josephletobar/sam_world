@@ -79,6 +79,9 @@ class GraphBuilder:
         return final_graph
 
     def _build_topology(self):
+        if len(self.G.nodes()) == 0:
+            return self.G
+
         threshold_graph = nx.Graph(
             (u, v, d)
             for u, v, d in self.G.edges(data=True)

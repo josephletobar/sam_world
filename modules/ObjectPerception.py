@@ -3,7 +3,6 @@ import numpy as np
 from dataclasses import dataclass
 from ultralytics.models.sam import SAM3SemanticPredictor
 
-from utils import association
 from utils.get_obj_pos import get_pos
 from utils.clip_embedding import embed_image, embed_text
 

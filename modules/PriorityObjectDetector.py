@@ -1,14 +1,9 @@
 from ultralytics import YOLOWorld
 
 class PriorityObjectDetector:
-    def __init__(self):
+    def __init__(self, priority_labels):
         self.model = YOLOWorld("yolov8x-worldv2.pt")
-        self.model.set_classes([
-            "person",
-            "vehicle",
-            "backpack",
-            "dog"
-        ])
+        self.model.set_classes(priority_labels)
         self.prev_yolo_labels = None
         self.detected_objects = None
         self.yolo_boxes = None

@@ -3,13 +3,13 @@ import cv2
 import numpy as np
 import traceback
 
-from utils.association import association
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.SceneDiff import SceneDifferenceDetector
 from modules.PriorityObjectDetector import PriorityObjectDetector
 from modules.ObjectPerception import ObjectPerception
+from modules.Association import Association
 
 class RobotWorldModel:
 
@@ -17,18 +17,18 @@ class RobotWorldModel:
         self.load_slam_data(source)
         self.frame_idx = 0        
 
+        self.global_objects = []
+
+        self.DEFAULT_LABELS = ["person"]
+
         self.scene_diff_detector = SceneDifferenceDetector()
         self.scene_understanding = SceneUnderstanding(client="openai")
-        self.priority_object_detector = PriorityObjectDetector()
+        self.priority_object_detector = PriorityObjectDetector(self.DEFAULT_LABELS)
         self.object_perception = ObjectPerception()
         self.graph_builder = GraphBuilder()
+        self.association = Association(self.global_objects, self.graph_builder)
 
-        self.DEFAULT_LABELS = [
-        ]
         self.vocabulary = set(self.DEFAULT_LABELS)
-
-        # Global object storage
-        self.global_objects = []
 
         self.yolo_boxes = None
 
@@ -220,12 +220,14 @@ class RobotWorldModel:
         pose = slam_dict["pose"]
 
         priority_objects = self.priority_object_detector.detect(frame)
+        self.yolo_boxes = self.priority_object_detector.yolo_boxes
         if len(priority_objects) > 0:
             print("PRIORITY OBJECTS DETECTED:", priority_objects)
             self.vocabulary.update(priority_objects)
-        self.yolo_boxes = self.priority_object_detector.yolo_boxes
 
-        # Detect scene changes and get YOLO boxes
+            scene_changed = True
+
+        # Detect scene changes
         scene_changed = self.scene_diff_detector.should_reprompt(frame, pose)
 
         # Run VLM and SAM if significant change detected or first frame
@@ -246,32 +248,14 @@ class RobotWorldModel:
                 return True
             
             objects, annotated = self.object_perception.get_objects(frame, full_labels, slam_dict)
-
-            if len(self.global_objects) > 0:
-            
-                for object in objects:
-                    different, object.node_id = association(new_object=object, world_objects=self.global_objects)
-
-                    if different:
-                        self.global_objects.append(object)
-                        self.graph_builder.add_object(object, self.global_objects)
-
-                    elif not different:
-                        # Merge Nodes (skip for now)
-                        pass
-
-            else:
-                for obj in objects:
-                    obj.node_id = f"{obj.label}_{sum(1 for o in self.global_objects if o.label == obj.label)}"
-                    self.global_objects.append(obj)
-                    self.graph_builder.add_object(obj, self.global_objects)
+            for obj in objects:
+                self.association.update(obj)
 
             self.graph_builder.draw_2d_graph()
 
             for obj in objects:
                 cx, cy = obj.image_pos
                 world_x, world_y, world_z = obj.world_pos
-
                 cv2.putText(
                     annotated,
                     f"{world_x:.2f}, {world_y:.2f}, {world_z:.2f}",
@@ -300,17 +284,10 @@ class RobotWorldModel:
         
 
 if __name__ == "__main__":
-
-    # world = RobotWorldModel("assets/challenge_video.mp4")
-    # world = RobotWorldModel(
-    #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz"
-    # )
-    # world = RobotWorldModel(
-    #     r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam"
-    # )
+    # world = RobotWorldModel(r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz")
+    # world = RobotWorldModel(r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam")
     # world = RobotWorldModel(r"D:\forest_data")
     world = RobotWorldModel(r"D:\kab3_data")
-
 
     try:
         while True:
