@@ -1,17 +1,16 @@
 from cProfile import label
 import os
-import json
 import cv2
 import numpy as np
 import traceback
-from networkx.readwrite import json_graph
 import networkx as nx
 import matplotlib
+
+from modules.GraphBuilder import GraphBuilder
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
 from ultralytics.models.sam import SAM3SemanticPredictor
-from sklearn.cluster import DBSCAN
 from mpl_toolkits.mplot3d import Axes3D
 
 from utils.get_obj_pos import get_pos
@@ -23,9 +22,6 @@ from modules.SceneUnderstanding import SceneUnderstanding
 from modules.SceneDiff import SceneDifferenceDetector
 from modules.PriorityObjectDetector import PriorityObjectDetector
 from modules.ObjectPerception import ObjectPerception
-
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
 
 class RobotWorldModel:
 
@@ -55,27 +51,11 @@ class RobotWorldModel:
         self.scene_understanding = SceneUnderstanding(client="openai")
         self.priority_object_detector = PriorityObjectDetector()
         self.object_perception = ObjectPerception(sam_predictor=SAM3SemanticPredictor(overrides=overrides))
-
-        # Graph SETUP
-        self.G = nx.Graph()
-        self.pos = {}
-
-        # Set Constants/Thresholds
-        self.SAM_STEP = 5
-        self.CHANGE_STEP = 5
-        self.DIFF_TRESHOLD = 0.75
+        self.graph_builder = GraphBuilder()
 
         self.DEFAULT_LABELS = [
         ]
         self.vocabulary = set(self.DEFAULT_LABELS)
-
-        # Init Variables
-        self.run_gpt = False
-        self.sam_labels = []
-        self.prev_gpt_call = {
-            "frame" : None,
-            "position" : None
-        }
 
         # Global object storage
         self.global_objects = []
@@ -197,107 +177,7 @@ class RobotWorldModel:
             ])
         )
 
-    # Adds to Graph and updates memories
-    def add_object(self, obj):
-
-        print("--NEW OBJECT--")
-
-        world_x, world_y, world_z = obj.world_pos
-
-        self.G.add_node(
-            obj.node_id,
-            world_x=float(world_x),
-            world_y=float(world_y),
-            world_z=float(world_z),
-            txt_embedding=obj.txt_embedding.tolist(),
-            img_embedding=obj.img_embedding,
-            confidence=obj.confidence
-        )
-
-        self.pos[obj.node_id] = (
-            world_x,
-            world_z
-        )
-
-        for other_obj in self.global_objects:
-            if other_obj.node_id == obj.node_id:
-                continue
-
-            dist = np.linalg.norm(
-                np.array(obj.world_pos) -
-                np.array(other_obj.world_pos)
-            )
-
-            self.G.add_edge(
-                obj.node_id,
-                other_obj.node_id,
-                weight=round(dist, 2)
-            )
-
-    def draw_graph(self):
-
-        threshold_graph = nx.Graph(
-            (u, v, d)
-            for u, v, d in self.G.edges(data=True)
-            if d["weight"] < 0.5
-        )
-
-        mst = nx.minimum_spanning_tree(self.G, weight="weight")
-
-        final_graph = nx.compose(mst, threshold_graph)
-
-        edge_labels = nx.get_edge_attributes(final_graph, "weight")
-
-        node_colors = [
-            self.G.nodes[n]["cluster"]
-            for n in final_graph.nodes()
-        ]
-
-        nx.draw(
-            final_graph,
-            self.pos,
-            with_labels=True,
-            node_size=1000,
-            node_color=node_colors,
-            cmap=plt.cm.tab10
-        )
-
-        # nx.draw(final_graph, self.pos, with_labels=True, node_size=1000)
-
-        nx.draw_networkx_edge_labels(
-            final_graph,
-            self.pos,
-            edge_labels=edge_labels
-        )
-
-        return final_graph
-    
-    
-    def cluster(self):
-        nodes = list(self.G.nodes())
-
-        X = np.array([
-            [
-                self.G.nodes[n]["world_x"],
-                self.G.nodes[n]["world_y"],
-                self.G.nodes[n]["world_z"],
-            ]
-            for n in nodes
-        ])
-
-        if len(X) == 0:
-            return
-
-        labels = DBSCAN(
-            eps=0.4,
-            min_samples=3
-        ).fit_predict(X)
-
-        for node, cluster_id in zip(nodes, labels):
-            self.G.nodes[node]["cluster"] = int(cluster_id)
-
     def get_next_frame(self):
-
         if self.source_type == "video":
             ret, frame = self.cap.read()
             return ret, frame, None
@@ -347,18 +227,14 @@ class RobotWorldModel:
 
             self.frame_idx += 1
 
-
-
             return True, rgb_frame, slam_dict
 
     def draw_yolo_boxes(self, frame, yolo_boxes):
         if yolo_boxes is None:
             return frame
-
         annotated = frame.copy()
         for box in yolo_boxes:
             x1, y1, x2, y2 = box.xyxy[0].detach().cpu().numpy().astype(int)
-
             cv2.rectangle(
                 annotated,
                 (x1, y1),
@@ -366,9 +242,7 @@ class RobotWorldModel:
                 (0, 255, 255),
                 2
             )
-
         return annotated
-
 
     def run(self):
 
@@ -386,14 +260,6 @@ class RobotWorldModel:
             print("PRIORITY OBJECTS DETECTED:", priority_objects)
             self.vocabulary.update(priority_objects)
         yolo_boxes = self.priority_object_detector.yolo_boxes
-
-        # # Only run SAM every SAM_STEP frames
-        # if self.frame_count % self.SAM_STEP != 0:
-        #     return True
-
-        self.run_gpt = False
-
-        yolo_boxes = None
 
         # Detect scene changes and get YOLO boxes
         scene_changed = self.scene_diff_detector.should_reprompt(frame, pose)
@@ -425,7 +291,7 @@ class RobotWorldModel:
 
                     if different:
                         self.global_objects.append(object)
-                        self.add_object(object)
+                        self.graph_builder.add_object(object, self.global_objects)
 
                     elif not different:
                         # Merge Nodes (skip for now)
@@ -435,29 +301,13 @@ class RobotWorldModel:
                 for obj in objects:
                     obj.node_id = f"{obj.label}_{sum(1 for o in self.global_objects if o.label == obj.label)}"
                     self.global_objects.append(obj)
-                    self.add_object(obj)
+                    self.graph_builder.add_object(obj, self.global_objects)
 
-            self.cluster()
-
-            # Display graph using NetworkX and Matplotlib
-            plt.clf()
-
-            self.draw_graph()
-
-            plt.pause(0.1)
-            plt.draw()
+            self.graph_builder.draw_2d_graph()
 
             for obj in objects:
                 cx, cy = obj.image_pos
                 world_x, world_y, world_z = obj.world_pos
-
-                cv2.circle(
-                    annotated,
-                    (int(cx), int(cy)),
-                    5,
-                    (0, 0, 0),
-                    -1
-                )
 
                 cv2.putText(
                     annotated,
@@ -476,19 +326,11 @@ class RobotWorldModel:
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
 
-                final_graph = self.draw_graph()
-
-                data = json_graph.node_link_data(final_graph)
-                with open("graph.json", "w") as f:
-                    json.dump(data, f, indent=2)
+                self.graph_builder.save_graph()
 
                 return False
 
-            final_graph = self.draw_graph()
-
-            data = json_graph.node_link_data(final_graph)
-            with open("graph.json", "w") as f:
-                json.dump(data, f, indent=2)
+            self.graph_builder.save_graph()
 
             return True
         
@@ -526,58 +368,7 @@ if __name__ == "__main__":
 
     finally:
 
-        final_graph = world.draw_graph()
-
-        plt.close("all")
-
-
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection="3d")
-
-        for node in final_graph.nodes():
-            x = final_graph.nodes[node]["world_x"]
-            y = final_graph.nodes[node]["world_y"]
-            z = final_graph.nodes[node]["world_z"]
-
-            cluster = final_graph.nodes[node].get("cluster", -1)
-            
-            color = plt.cm.tab10(cluster % 10)
-            ax.scatter(
-                x, y, z,
-                color=color,
-                s=150
-            )
-
-            print(node, cluster)
-
-            ax.text(x, y, z, node)
-
-        for u, v in final_graph.edges():
-            x1 = final_graph.nodes[u]["world_x"]
-            y1 = final_graph.nodes[u]["world_y"]
-            z1 = final_graph.nodes[u]["world_z"]
-
-            x2 = final_graph.nodes[v]["world_x"]
-            y2 = final_graph.nodes[v]["world_y"]
-            z2 = final_graph.nodes[v]["world_z"]
-
-            ax.plot([x1, x2], [y1, y2], [z1, z2], color="gray", alpha=0.4)
-
-            weight = final_graph[u][v]["weight"]
-
-            ax.text(
-                (x1 + x2) / 2,
-                (y1 + y2) / 2,
-                (z1 + z2) / 2,
-                f"{weight:.2f}"
-            )
-
-        data = json_graph.node_link_data(final_graph)
-        with open("graph.json", "w") as f:
-            json.dump(data, f, indent=2)
-        print("Graph saved.")
-
-        plt.show(block=False)
+        final_graph = world.graph_builder.draw_3d_graph()
 
         chat = ChatWithGraph(final_graph)
         while True:
