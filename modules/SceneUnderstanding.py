@@ -45,18 +45,12 @@ scene:
 
 landmarks:
 - physical objects only
-- objects a human operator would naturally reference later
-- use descriptive names when visible
-
-- prefer vehicles, equipment, machinery, people, tools, signs, structures, barriers, and other identifiable objects
-
-- do not include terrain, vegetation, roads, pavement, markings, textures, walls, floors, ceilings, or other background elements
-
-- do not include ordinary natural objects unless unusually distinctive
-
+- include only objects a human operator would realistically use as a reference later
+- name objects the way a human operator would naturally refer to them
+- keep names short and practical
+- include color or type only when it helps identify the object
+- do not include background, terrain, vegetation, roads, pavement, markings, textures, walls, floors, ceilings, or ordinary natural features
 - return [] if no useful reference objects are visible
-
-Do not include small environmental features that are unlikely to be intentionally referenced by a human operator.
 
 Only include objects directly visible in the image.
 
@@ -177,22 +171,32 @@ class OllamaClient:
 
         return labels
 
+class SceneUnderstanding:
+
+    def __init__(self, client):
+
+        if client == "openai":
+            self.client = OpenAIClient()
+        elif client == "ollama":
+            self.client = OllamaClient()
+        else:
+            raise ValueError("Invalid client specified. Use 'openai' or 'ollama'.") 
+
+    def get_labels(self, frame, vocabulary):
+        # Prepare image for VLM
+        downsized_frame = cv2.resize(frame, (960, 540))
+        _, buffer = cv2.imencode(".jpg", downsized_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+        base64_image = base64.b64encode(buffer).decode("utf-8")
+
+        labels = self.client.generate(
+            vocabulary=vocabulary,
+            image=base64_image,
+        )
+
+        return labels
+    
 
 
-def vlm(frame, vocabulary, client=OpenAIClient()):
-
-    # Prepare image for VLM
-    downsized_frame = cv2.resize(frame, (960, 540))
-    _, buffer = cv2.imencode(".jpg", downsized_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-    base64_image = base64.b64encode(buffer).decode("utf-8")
-
-    labels = client.generate(
-        vocabulary=vocabulary,
-        image=base64_image,
-    )
 
 
-
-
-    return labels
 

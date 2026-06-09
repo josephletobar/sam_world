@@ -1,36 +1,31 @@
 import os
 import json
-from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
-from openai import OpenAI
-import base64
-import random
 import numpy as np
 import traceback
-from scripts.vlm import vlm
-from scripts.get_obj_pos import get_pos
-from scripts.scene_dif import should_reprompt
-from scripts.graph_chat import ChatWithGraph
-from scripts.clip_embedding import embed_image, embed_text
-from scripts.association import association
 from networkx.readwrite import json_graph
 import networkx as nx
-from sklearn.metrics.pairwise import cosine_similarity
-from networkx.drawing.nx_pydot import graphviz_layout
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
+
+from ultralytics.models.sam import SAM3SemanticPredictor
 from sklearn.cluster import DBSCAN
 from mpl_toolkits.mplot3d import Axes3D
 from ultralytics import YOLOWorld
 
+from utils.get_obj_pos import get_pos
+from utils.clip_embedding import embed_image, embed_text
+from utils.association import association
+
+from modules.GraphChat import ChatWithGraph
+from modules.SceneUnderstanding import SceneUnderstanding
+from modules.SceneDiff import SceneDifferenceDetector
 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection="3d")
 
-
-
-class SamWorld:
+class RobotWorldModel:
 
     def __init__(self, source):
 
@@ -51,10 +46,15 @@ class SamWorld:
             task="segment",
             mode="predict",
             model="sam3.pt",
+            save=False,
         )
         self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
 
         self.yolo_model = YOLOWorld("yolov8x-worldv2.pt")
+
+        self.scene_diff_detector = SceneDifferenceDetector()
+        self.scene_understanding = SceneUnderstanding(client="openai")
+
 
         # Graph SETUP
         self.G = nx.Graph()
@@ -312,6 +312,9 @@ class SamWorld:
             for n in nodes
         ])
 
+        if len(X) == 0:
+            return
+
         labels = DBSCAN(
             eps=0.4,
             min_samples=3
@@ -375,6 +378,24 @@ class SamWorld:
 
             return True, rgb_frame, slam_dict
 
+    def draw_yolo_boxes(self, frame, yolo_boxes):
+        if yolo_boxes is None:
+            return frame
+
+        annotated = frame.copy()
+        for box in yolo_boxes:
+            x1, y1, x2, y2 = box.xyxy[0].detach().cpu().numpy().astype(int)
+
+            cv2.rectangle(
+                annotated,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 255),
+                2
+            )
+
+        return annotated
+
 
     def run(self):
 
@@ -387,116 +408,133 @@ class SamWorld:
 
         self.frame_count += 1
 
-        # yolo_results = self.yolo_model.predict(
-        #     frame,
-        #     conf=0.7,
-        #     verbose=False
-        # )
 
-        # Only run SAM every SAM_STEP frames
-        if self.frame_count % self.SAM_STEP != 0:
-            return True
+
+        # # Only run SAM every SAM_STEP frames
+        # if self.frame_count % self.SAM_STEP != 0:
+        #     return True
 
         self.run_gpt = False
 
-        # Stepped Frame Differencing Logic
+        yolo_boxes = None
 
-        # first iteration
-        if (
-            self.prev_gpt_call["frame"] is None
-            or
-            self.prev_gpt_call["position"] is None
-        ):
+        # Detect scene changes and get YOLO boxes
+        self.run_gpt = self.scene_diff_detector.should_reprompt(frame, pose)
+        yolo_boxes = self.scene_diff_detector.yolo_boxes
 
-            self.prev_gpt_call["frame"] = frame
-            self.prev_gpt_call["position"] = pose
-
-            self.run_gpt = True
-
-        elif self.frame_count % self.CHANGE_STEP == 0:
-
-            prev_cur_frames =  self.prev_gpt_call["frame"], frame 
-            prev_cur_pos = self.prev_gpt_call["position"], pose
-
-            self.run_gpt, _, _ = should_reprompt(prev_cur_frames, prev_cur_pos)
-
-            if self.run_gpt == True:
-                self.prev_gpt_call["frame"] = frame
-                self.prev_gpt_call["position"] = pose
-
-        # Run LLM if significant change detected or first frame
+        # Run VLM and SAM if significant change detected or first frame
         if self.run_gpt:
-            print("--- LLM RUNNING ---")
-            self.sam_labels = vlm(
-                frame,
-                list(self.vocabulary)
-            )
+            print("--- VLM RAN ---")
+
+            self.scene_understanding.get_labels(frame, self.vocabulary)
+
+            self.sam_labels = self.scene_understanding.get_labels(frame, self.vocabulary)
+
             print(self.sam_labels)
 
+            full_labels = (
+                self.DEFAULT_LABELS +
+                self.sam_labels
+            )
 
-        full_labels = (
-            self.DEFAULT_LABELS +
-            self.sam_labels
-        )
+            self.vocabulary.update(self.sam_labels)
 
+            if len(full_labels) == 0:
+                cv2.imshow("Video", self.draw_yolo_boxes(frame, yolo_boxes))
+                cv2.waitKey(1)
+                return True
 
-        self.vocabulary.update(self.sam_labels)
+            # Run SAM3 with the combined labels
+            results = self.sam_predictor(
+                frame,
+                text=full_labels,
+                # imgsz=448,
+                save=False,
+                verbose=False
+            )
+            result = results[0]
+            annotated = result.plot()
 
-        # Run SAM3 with the combined labels
-        results = self.sam_predictor(
-            frame,
-            text=full_labels,
-            # imgsz=448,
-            save=False,
-            verbose=False
-        )
-        result = results[0]
-        annotated = result.plot()
+            if result.boxes is None or len(result.boxes) == 0:
+                print("No detections")
+                cv2.imshow("Video", self.draw_yolo_boxes(frame, yolo_boxes))
+                cv2.waitKey(1)
+                return True
 
-        # Add Detected Labels to Knowledge Graph
-        object_poses_buf = []
-        for i, box in enumerate(result.boxes):
-            # Results object
-            cls_id = int(box.cls[0])
-            label = result.names[cls_id]
-            confidence = float(box.conf[0])
-            mask = result.masks.data[i]
-            mask = mask.cpu().numpy()
+            # Add Detected Labels to Knowledge Graph
+            object_poses_buf = []
+            for i, box in enumerate(result.boxes):
+                # Results object
+                cls_id = int(box.cls[0])
+                label = result.names[cls_id]
+                confidence = float(box.conf[0])
+                mask = result.masks.data[i]
+                mask = mask.cpu().numpy()
 
-            # Find objects position
-            ys, xs = np.where(mask > 0.5)
+                # Find objects position
+                ys, xs = np.where(mask > 0.5)
 
-            object_pose = get_pos(mask, depth, pose)
-            if object_pose is None: continue
+                object_pose = get_pos(mask, depth, pose)
+                if object_pose is None: continue
 
-            world_pos, image_pos = object_pose
+                world_pos, image_pos = object_pose
 
-            object_poses_buf.append((image_pos, world_pos, confidence))
+                object_poses_buf.append((image_pos, world_pos, confidence))
 
-            segmented_rgb = frame.copy()
-            segmented_rgb[mask == 0] = 0
-            segmented_rgb = segmented_rgb[
-                ys.min():ys.max(),
-                xs.min():xs.max()
-            ]
+                segmented_rgb = frame.copy()
+                segmented_rgb[mask == 0] = 0
+                segmented_rgb = segmented_rgb[
+                    ys.min():ys.max(),
+                    xs.min():xs.max()
+                ]
 
-            img_embedding = embed_image(segmented_rgb)
-            txt_embedding = embed_text(label)
+                img_embedding = embed_image(segmented_rgb)
+                txt_embedding = embed_text(label)
 
-            # Object Association
-            new_data = (label, img_embedding, segmented_rgb, world_pos if slam_dict else None)
-            all_data = (self.labels, self.embedding_matrix, self.segmented_rgbs, self.world_poses if slam_dict else None)
+                # Object Association
+                new_data = (label, img_embedding, segmented_rgb, world_pos if slam_dict else None)
+                all_data = (self.labels, self.embedding_matrix, self.segmented_rgbs, self.world_poses if slam_dict else None)
 
-            if len(self.embedding_matrix) > 0:
+                if len(self.embedding_matrix) > 0:
 
-                best_prob, best_id, best_idx = association(new_data, all_data)
-        
-                # New Node
-                # print("-------")
-                # print(best_prob)
-                # print("-------")
-                if best_prob < self.SIM_THRESHOLD:
+                    best_prob, best_id, best_idx = association(new_data, all_data)
+            
+                    # New Node
+                    # print("-------")
+                    # print(best_prob)
+                    # print("-------")
+                    if best_prob < self.SIM_THRESHOLD:
 
+                        count = self.label_counts.get(label, 0)
+                        node_id = f"{label}_{count}"
+                        self.label_counts[label] = count + 1
+
+                        self.add_object(
+                            txt_embedding,
+                            img_embedding,
+                            node_id,
+                            segmented_rgb,
+                            world_pos,
+                            confidence
+                        )
+
+                        # cv2.imshow("NEWOBJECT", segmented_rgb)
+                        # cv2.waitKey(0)
+                        # cv2.destroyWindow("NEWOBJECT")
+                    
+                    else: # Existing Node
+                        # Merge Nodes
+
+                        # # debug to visualize the matched objects
+                        # print(best_prob)
+                        # cv2.imshow("match1", segmented)
+                        # cv2.imshow("match2", self.segmented_rgbs[best_idx])
+                        # cv2.waitKey(0)
+                        # cv2.destroyAllWindows()
+                        pass
+
+                # First Node
+                else:
                     count = self.label_counts.get(label, 0)
                     node_id = f"{label}_{count}"
                     self.label_counts[label] = count + 1
@@ -510,85 +548,65 @@ class SamWorld:
                         confidence
                     )
 
-                    # cv2.imshow("NEWOBJECT", segmented_rgb)
-                    # cv2.waitKey(0)
-                    # cv2.destroyWindow("NEWOBJECT")
-                
-                else: # Existing Node
-                    # Merge Nodes
+            self.cluster()
 
-                    # # debug to visualize the matched objects
-                    # print(best_prob)
-                    # cv2.imshow("match1", segmented)
-                    # cv2.imshow("match2", self.segmented_rgbs[best_idx])
-                    # cv2.waitKey(0)
-                    # cv2.destroyAllWindows()
-                    pass
+            # Display graph using NetworkX and Matplotlib
+            plt.clf()
 
-            # First Node
-            else:
-                count = self.label_counts.get(label, 0)
-                node_id = f"{label}_{count}"
-                self.label_counts[label] = count + 1
+            # mst = nx.minimum_spanning_tree(self.G, weight="weight")
+            # edge_labels = nx.get_edge_attributes(mst, "weight")
 
-                self.add_object(
-                    txt_embedding,
-                    img_embedding,
-                    node_id,
-                    segmented_rgb,
-                    world_pos,
-                    confidence
+            # nx.draw(mst, self.pos, with_labels=True, node_size=1000)
+
+            # nx.draw_networkx_edge_labels(
+            #     mst,
+            #     self.pos,
+            #     edge_labels=edge_labels
+            # )
+
+            self.draw_graph()
+
+            plt.pause(0.1)
+            plt.draw()
+
+            for ((cx, cy), world_pos, confidence) in object_poses_buf:
+                world_x, world_y, world_z = world_pos
+
+                cv2.circle(
+                    annotated,
+                    (int(cx), int(cy)),
+                    5,
+                    (0, 0, 0),
+                    -1
                 )
 
-        self.cluster()
-
-        # Display graph using NetworkX and Matplotlib
-        plt.clf()
-
-        # mst = nx.minimum_spanning_tree(self.G, weight="weight")
-        # edge_labels = nx.get_edge_attributes(mst, "weight")
-
-        # nx.draw(mst, self.pos, with_labels=True, node_size=1000)
-
-        # nx.draw_networkx_edge_labels(
-        #     mst,
-        #     self.pos,
-        #     edge_labels=edge_labels
-        # )
-
-        self.draw_graph()
-
-        plt.pause(0.1)
-        plt.draw()
-
-        for ((cx, cy), world_pos, confidence) in object_poses_buf:
-            world_x, world_y, world_z = world_pos
-
-            cv2.circle(
-                annotated,
-                (int(cx), int(cy)),
-                5,
-                (0, 0, 0),
-                -1
+                cv2.putText(
+                    annotated,
+                    f"{world_x:.2f}, {world_y:.2f}, {world_z:.2f}",
+                    (int(cx), int(cy) - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 0, 0),
+                    2
             )
 
-            cv2.putText(
-                annotated,
-                f"{world_x:.2f}, {world_y:.2f}, {world_z:.2f}",
-                (int(cx), int(cy) - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 0, 0),
-                2
-    )
+            # Display the annotated frame
+            annotated = self.draw_yolo_boxes(annotated, yolo_boxes)
+            cv2.imshow("Video", annotated)
+            cv2.waitKey(1)
 
-        # Display the annotated frame
-        cv2.imshow("SAM3 Video", annotated)
+            # cv2.waitKey(0)
+            # cv2.destroyWindow("SAM3 Video")
 
-        # cv2.waitKey(0)
-        # cv2.destroyWindow("SAM3 Video")
+            if cv2.waitKey(1) & 0xFF == ord("q"):
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+                final_graph = self.draw_graph()
+
+                data = json_graph.node_link_data(final_graph)
+                with open("graph.json", "w") as f:
+                    json.dump(data, f, indent=2)
+
+                return False
 
             final_graph = self.draw_graph()
 
@@ -596,15 +614,12 @@ class SamWorld:
             with open("graph.json", "w") as f:
                 json.dump(data, f, indent=2)
 
-            return False
-
-        final_graph = self.draw_graph()
-
-        data = json_graph.node_link_data(final_graph)
-        with open("graph.json", "w") as f:
-            json.dump(data, f, indent=2)
-
+            return True
+        
+        cv2.imshow("Video", self.draw_yolo_boxes(frame, yolo_boxes))
+        cv2.waitKey(1)
         return True
+        
     
 
 

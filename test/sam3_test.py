@@ -26,12 +26,7 @@ for img_path in sorted(image_dir.glob("*")):
     results = predictor(
         text=[
             "person",
-            "tripod",
-            "bicycle",
-            "backpack",
-            "car",
-            "tree",
-            "bench"
+            "car"
         ]
     )
 

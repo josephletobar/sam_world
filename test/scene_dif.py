@@ -1,4 +1,5 @@
 import cv2
+from ultralytics import YOLOWorld
 from scripts.clip_embedding import embed_image
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.transform import Rotation as R
@@ -6,20 +7,44 @@ import numpy as np
 
 TRESHOLD = .7
 
+model = YOLOWorld("yolov8x-worldv2.pt")
+
 # decides if VLM should be reprompted based on scene difference
 def should_reprompt(rgb_frame, pos):
 
     # return False
 
-    SEMANTIC_WEIGHT = 0.4
-    RGB_WEIGHT = 0.4
-    ROT_WEIGHT = 0.1
-    POS_WEIGHT = 0.1
+    SEMANTIC_WEIGHT = 0.45
+    RGB_WEIGHT = 0.45
+    ROT_WEIGHT = 0.05
+    POS_WEIGHT = 0.05
     TIME_WEIGHT = 0.0
     
     # Unpack 
     prev_rgb_frame, cur_rgb_frame = rgb_frame
     prev_pos, cur_pos = pos
+
+    # yolo world objects
+    prev_yolo_objs = model.predict(
+        prev_rgb_frame,
+        conf=0.95,
+        verbose=False
+    )
+    cur_yolo_objs = model.predict(
+        cur_rgb_frame,
+        conf=0.95,
+        verbose=False
+    )
+    prev_labels = {
+        prev_yolo_objs[0].names[int(box.cls)]
+        for box in prev_yolo_objs[0].boxes
+    }
+    cur_labels = {
+        cur_yolo_objs[0].names[int(box.cls)]
+        for box in cur_yolo_objs[0].boxes
+    }
+    yolo_feature = 1.0 if prev_labels != cur_labels else 0.0
+    if yolo_feature == 1.0: return True, None, None, cur_yolo_objs[0].boxes
 
     # get semantic frames
     prev_semantic_frame, cur_semantic_frame = embed_image(prev_rgb_frame), embed_image(cur_rgb_frame)
@@ -115,7 +140,8 @@ def should_reprompt(rgb_frame, pos):
             TIME_WEIGHT * time_norm,
             POS_WEIGHT * pos_norm,
             ROT_WEIGHT * rot_norm,
-        )
+        ),
+        cur_yolo_objs[0].boxes
     )
 
 if __name__ == "__main__":
