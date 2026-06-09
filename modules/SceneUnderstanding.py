@@ -35,27 +35,55 @@ OPEN_AI_VLM_PROMPT = """
 Return ONLY valid JSON.
 
 {{
-    "scene": "...",
-    "landmarks": [...]
+"scene": "...",
+"landmarks": [...]
 }}
 
 scene:
-- maximum 2 words
-- describe the overall environment
+
+* overall environment
+* maximum 2 words
 
 landmarks:
-- physical objects only
-- include only objects a human operator would realistically use as a reference later
-- name objects the way a human operator would naturally refer to them
-- keep names short and practical
-- include color or type only when it helps identify the object
-- do not include background, terrain, vegetation, roads, pavement, markings, textures, walls, floors, ceilings, or ordinary natural features
-- return [] if no useful reference objects are visible
 
-Only include objects directly visible in the image.
+* list visible physical objects
+* prefer objects that could be used as landmarks
+* each landmark must be a single identifiable object
+* use short natural descriptions
+* include only details needed to distinguish the object
+* do not include terrain, surfaces, clutter, or regions
+* include as many relevant objects as are visible
+
+Only describe what is directly visible.
 
 Return ONLY valid JSON.
 """
+
+REASONING_PROMPT = """
+You are given a list of candidate landmarks.
+
+For each landmark, ask:
+
+Would a search and rescue operator realistically use this object as a landmark when communicating with another human?
+
+Keep objects that a search and rescue operator might realistically reference when describing a location.
+
+Prefer distinctive and identifiable objects.
+
+Remove only obvious clutter, surfaces, terrain, and broad scene descriptions.
+
+Simplify descriptions into short natural landmark names.
+
+Return only a valid Python list of strings.
+
+Do not return JSON.
+Do not return explanations.
+Do not return reasoning.
+Do not return markdown.
+Do not return any text before or after the list.
+"""
+
+
 
 
 class OpenAIClient:
@@ -96,14 +124,21 @@ class OpenAIClient:
 
         response_dict = json.loads(response.output_text)
 
-        print(response_dict)
-
-        sam_labels = response_dict.get(
+        raw_landmarks = response_dict.get(
             "landmarks",
             []
         )
 
-        return sam_labels
+        response = self.client.responses.create(
+            model="gpt-5",
+            input=f"{REASONING_PROMPT}\n\nLandmarks:\n{raw_landmarks}"
+        )
+
+        refined_landmarks = ast.literal_eval(response.output_text)
+
+        print(refined_landmarks)
+
+        return refined_landmarks
 
 
 class OllamaClient:
