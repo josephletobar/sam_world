@@ -72,6 +72,10 @@ Prefer distinctive and identifiable objects.
 
 Remove only obvious clutter, surfaces, terrain, and broad scene descriptions.
 
+- Discard common, repetitive, or generic objects that would not be useful for navigation or communication.
+- Prefer landmarks a human would naturally reference, such as vehicles, signs, entrances, staircases, archways, benches, utility structures, or distinctive man-made objects.
+- Avoid objects that are likely to appear many times in the scene, such as grass, rocks, trees, bushes, people, or generic vegetation, unless they are unusually distinctive.
+
 Simplify descriptions into short natural landmark names.
 
 Return only a valid Python list of strings.
@@ -130,9 +134,23 @@ class OpenAIClient:
         )
 
         response = self.client.responses.create(
-            model="gpt-5",
+            model="gpt-4.1-mini",
             input=f"{REASONING_PROMPT}\n\nLandmarks:\n{raw_landmarks}"
         )
+
+        # response = ollama.chat(
+        #     model="qwen3:4b",
+        #     options={
+        #         "temperature": 0,
+        #         "num_predict": 100
+        #     },
+        #     messages=[
+        #         {
+        #             "role": "user",
+        #             "content": f"{REASONING_PROMPT}\n\nLandmarks:\n{raw_landmarks}"
+        #         }
+        #     ]
+        # )
 
         refined_landmarks = ast.literal_eval(response.output_text)
 

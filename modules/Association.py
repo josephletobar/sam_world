@@ -6,7 +6,7 @@ from modules.ObjectPerception import WorldObject
 
 class Association():
 
-    def __init__(self, global_objects, graph_builder, threshold=0.8):
+    def __init__(self, global_objects, graph_builder, threshold=0.95):
 
         self.global_objects = global_objects
         self.graph_builder = graph_builder
@@ -96,15 +96,21 @@ class Association():
         
             different, new_object.node_id = self._associate(new_object=new_object, world_objects=self.global_objects)
 
-            if different:
-                self.global_objects.append(new_object)
-                self.graph_builder.add_object(new_object, self.global_objects)
+            try:    
+                if different:
+                    self.global_objects.append(new_object)
+                    self.graph_builder.add_object(new_object, self.global_objects)
 
-            elif not different:
-                # Merge Nodes (skip for now)
-                pass
+                elif not different:
+                    # Merge Nodes (skip for now)
+                    pass
+            except Exception as e:
+                print(e)
 
         else:
-            new_object.node_id = f"{new_object.label}_{sum(1 for o in self.global_objects if o.label == new_object.label)}"
-            self.global_objects.append(new_object)
-            self.graph_builder.add_object(new_object, self.global_objects)
+            try:
+                new_object.node_id = f"{new_object.label}_{sum(1 for o in self.global_objects if o.label == new_object.label)}"
+                self.global_objects.append(new_object)
+                self.graph_builder.add_object(new_object, self.global_objects)
+            except Exception as e:
+                print(e)

@@ -10,6 +10,10 @@ from modules.SceneDiff import SceneDifferenceDetector
 from modules.PriorityObjectDetector import PriorityObjectDetector
 from modules.ObjectPerception import ObjectPerception
 from modules.Association import Association
+from modules.ObjectTracker import TrackObject
+
+DISPLAY_W = 1920
+DISPLAY_H = 1080
 
 class RobotWorldModel:
 
@@ -21,12 +25,17 @@ class RobotWorldModel:
 
         self.DEFAULT_LABELS = ["person"]
 
+        self.STEP_FRAMES = 5
+
         self.scene_diff_detector = SceneDifferenceDetector()
         self.scene_understanding = SceneUnderstanding(client="openai")
         self.priority_object_detector = PriorityObjectDetector(self.DEFAULT_LABELS)
         self.object_perception = ObjectPerception()
         self.graph_builder = GraphBuilder()
         self.association = Association(self.global_objects, self.graph_builder)
+
+        self.tracker = None
+        self.track_result = None
 
         self.vocabulary = set(self.DEFAULT_LABELS)
 
@@ -190,22 +199,32 @@ class RobotWorldModel:
         self.frame_idx += 1
 
         return True, rgb_frame, slam_dict
-    
+
     def show_video(self, frame):
 
         annotated = frame.copy()
 
-        if self.yolo_boxes is not None:
-            for box in self.yolo_boxes:
-                x1, y1, x2, y2 = box.xyxy[0].detach().cpu().numpy().astype(int)
+        if self.track_result is not None:
+            track_annotated = self.track_result.get("annotated")
 
-                cv2.rectangle(
-                    annotated,
-                    (x1, y1),
-                    (x2, y2),
-                    (0, 255, 255),
-                    2
-                )
+            if track_annotated is not None:
+                annotated = cv2.resize(track_annotated, (DISPLAY_W, DISPLAY_H))
+
+        annotated = cv2.resize(annotated, (DISPLAY_W, DISPLAY_H))
+
+        if self.yolo_boxes is not None:
+            scale_x = DISPLAY_W / frame.shape[1]
+            scale_y = DISPLAY_H / frame.shape[0]
+
+            for box in self.yolo_boxes:
+                x1, y1, x2, y2 = box.xyxy[0].detach().cpu().numpy()
+
+                x1 = int(x1 * scale_x)
+                y1 = int(y1 * scale_y)
+                x2 = int(x2 * scale_x)
+                y2 = int(y2 * scale_y)
+
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
         cv2.imshow("Video", annotated)
         cv2.waitKey(1)
@@ -213,10 +232,18 @@ class RobotWorldModel:
     def run(self):
 
         ret, frame, slam_dict = self.get_next_frame()
+
+        if self.frame_idx != 1 and self.frame_idx % self.STEP_FRAMES != 0:
+            return True
     
         if not ret:
             return False
         
+        if self.tracker is not None and self.tracker.initialized:
+            self.track_result = self.tracker.track(frame)
+        else:
+            self.track_result = None
+
         pose = slam_dict["pose"]
 
         priority_objects = self.priority_object_detector.detect(frame)
@@ -234,6 +261,8 @@ class RobotWorldModel:
         if scene_changed:
             print("--- VLM RAN ---")
 
+            self.priority_object_detector.prev_yolo_labels = None # Reset it
+
             self.sam_labels = self.scene_understanding.get_labels(frame, self.vocabulary)
 
             print(self.sam_labels)
@@ -250,6 +279,10 @@ class RobotWorldModel:
             objects, annotated = self.object_perception.get_objects(frame, full_labels, slam_dict)
             for obj in objects:
                 self.association.update(obj)
+
+            if len(objects) > 0:
+                self.tracker = TrackObject()
+                self.tracker.initialize(frame, objects)
 
             self.graph_builder.draw_2d_graph()
 

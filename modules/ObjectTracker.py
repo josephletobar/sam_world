@@ -1,10 +1,13 @@
 import sys
 from pathlib import Path
+from ultralytics.engine.results import Results
 
 import cv2
 import numpy as np
 import torch
 from ultralytics.models.sam import SAM3SemanticPredictor
+from modules.ObjectPerception import WorldObject, ObjectPerception
+from modules.Association import Association
 
 sys.path.append(r"C:\Users\jletobar3\Projects\XMem")
 from inference.inference_core import InferenceCore
@@ -49,7 +52,6 @@ class TrackObject:
     def __init__(
         self,
         xmem_model_path="models/XMem.pth",
-        sam_model_path="models/sam3.pt",
         config=None,
         resize_to=(640, 480),
         device=None,
@@ -69,14 +71,9 @@ class TrackObject:
             config=self.config
         )
 
-        overrides = dict(
-            conf=0.8,
-            task="segment",
-            mode="predict",
-            model=sam_model_path,
-            save=False,
-        )
-        self.sam_predictor = SAM3SemanticPredictor(overrides=overrides)
+        self.track_map = {}
+
+        self.counter = 0
 
         torch.set_grad_enabled(False)
 
@@ -85,35 +82,51 @@ class TrackObject:
             return frame
         return cv2.resize(frame, self.resize_to)
 
-    def initialize(self, frame, labels):
+    def _resize_masks(self, masks, size):
+        return np.stack([
+            cv2.resize(
+                mask.astype(np.float32),
+                size,
+                interpolation=cv2.INTER_NEAREST
+            )
+            for mask in masks
+        ])
+
+    # Expects WorldObject Data Class
+    def initialize(self, frame, objects: list[WorldObject]):
         frame = self._prepare_frame(frame)
 
+        self.track_map = {}
+
+        for track_id, obj in enumerate(objects, start=1):
+            self.track_map[track_id] = obj.node_id
+
+        masks = np.stack([obj.sam_mask.astype(np.float32) for obj in objects])
+
+        if self.resize_to is not None:
+            masks = self._resize_masks(masks, self.resize_to)
+
+        masks = torch.tensor(
+            masks,
+            dtype=torch.float32,
+            device=self.device
+        )
+
+        self.inference.set_all_labels(
+            list(range(1, masks.shape[0] + 1))
+        )
+
         with torch.no_grad():
-            self.sam_predictor.set_image(frame)
-            results = self.sam_predictor(text=labels)
-
-            if not len(results) or results[0].masks is None:
-                raise ValueError("SAM3 did not find masks for the requested labels")
-
-            result = results[0]
-            sam_masks = result.masks.data.float()
-            self.inference.set_all_labels(list(range(1, sam_masks.shape[0] + 1)))
-
             img_torch, _ = image_to_torch(frame, self.device)
-            self.inference.step(img_torch, sam_masks)
+            self.inference.step(img_torch, masks)
 
         self.initialized = True
-        self._cleanup_sam()
-
-        return {
-            "annotated": result.plot(),
-            "masks": sam_masks.detach().cpu().numpy(),
-        }
 
     def track(self, frame):
         if not self.initialized:
             raise RuntimeError("Call initialize(frame, labels) before track(frame)")
 
+        original_frame = frame
         frame = self._prepare_frame(frame)
 
         with torch.no_grad():
@@ -121,8 +134,20 @@ class TrackObject:
             masks = self.inference.step(img_torch)
 
         object_probs = masks[1:].detach().cpu().numpy()
-        segmented_rgbs = self.get_segmented_rgbs(frame, object_probs)
-        annotated = self.visualize(frame, object_probs)
+
+        for i, mask_prob in enumerate(object_probs):
+
+            confidence = mask_prob.max()
+
+            if confidence < 0.7:
+                object_probs[i] *= 0
+
+        if frame.shape[:2] != original_frame.shape[:2]:
+            original_size = (original_frame.shape[1], original_frame.shape[0])
+            object_probs = self._resize_masks(object_probs, original_size)
+
+        segmented_rgbs = self.get_segmented_rgbs(original_frame, object_probs)
+        annotated = self.visualize(original_frame, object_probs)
 
         return {
             "annotated": annotated,
@@ -145,7 +170,13 @@ class TrackObject:
         return segmented_rgbs
 
     def visualize(self, frame, object_probs, threshold=0.5, min_prob=0.9):
+
+        print(self.track_map)
+        print(object_probs.shape)
+
         annotated = frame.copy()
+
+        labels_to_draw = []
 
         for object_idx, mask_prob in enumerate(object_probs):
             mask_prob = mask_prob.copy()
@@ -154,6 +185,15 @@ class TrackObject:
 
             if not mask_binary.any():
                 continue
+
+            ys, xs = np.where(mask_binary)
+
+            track_id = object_idx + 1
+            node_id = self.track_map[track_id]
+
+            labels_to_draw.append(
+                (node_id, int(xs.mean()), int(ys.min()) - 10)
+            )
 
             color = PALETTE[object_idx % len(PALETTE)]
             alpha = mask_prob * 0.6
@@ -164,24 +204,25 @@ class TrackObject:
                     color[c] * alpha
                 ).astype(np.uint8)
 
+        for node_id, x, y in labels_to_draw:
+            cv2.putText(
+                annotated,
+                node_id,
+                (x, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2
+            )
+
         return annotated
 
-    def _cleanup_sam(self):
-        if (
-            hasattr(self.sam_predictor, "predictor")
-            and hasattr(self.sam_predictor.predictor, "features")
-        ):
-            self.sam_predictor.predictor.features = None
-
+    def cleanup(self):
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
 
-    def cleanup(self):
-        self._cleanup_sam()
-
-
 if __name__ == "__main__":
-    labels = ["keyboard", "monitor"]
+    sam_model_path="models/sam3.pt",
 
     image_dir = Path(
         r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz\rgb"
@@ -195,13 +236,37 @@ if __name__ == "__main__":
         raise ValueError(f"No images found in {image_dir}")
 
     tracker = TrackObject()
+    
 
     first_img = cv2.imread(str(image_paths[0]))
     if first_img is None:
         raise ValueError(f"Could not read first image: {image_paths[0]}")
+    
+    slam_dict = {
+        "rgb": first_img,
+        "depth": np.ones(first_img.shape[:2], dtype=np.float32),
+        "pose": {
+            "tx": 0.0,
+            "ty": 0.0,
+            "tz": 0.0,
+            "qx": 0.0,
+            "qy": 0.0,
+            "qz": 0.0,
+            "qw": 1.0,
+        },
+    }
+    
+    object_perception = ObjectPerception()
+    association = Association([], None)
 
-    init_result = tracker.initialize(first_img, labels)
-    cv2.imshow("Segmentation", init_result["annotated"])
+    objects, annotated = object_perception.get_objects(first_img, ["keyboard", "monitor"], slam_dict)
+    for obj in objects:
+        association.update(obj)
+
+    print(len(objects))
+
+    tracker.initialize(first_img, objects)
+    cv2.imshow("Segmentation", annotated)
 
     print("Press SPACE to start XMem tracking...")
     while True:

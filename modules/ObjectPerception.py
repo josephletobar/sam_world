@@ -11,6 +11,8 @@ class WorldObject:
     label: str
     confidence: float
 
+    sam_mask: np.ndarray
+
     world_pos: tuple[float, float, float]
     image_pos: tuple[int, int]
 
@@ -43,6 +45,15 @@ class ObjectPerception:
         pose = slam_dict["pose"]
         depth = slam_dict["depth"]
 
+        frame = cv2.resize(frame, (640, 480))
+
+        if depth.shape[:2] != frame.shape[:2]:
+            depth = cv2.resize(
+                depth,
+                (640, 480),
+                interpolation=cv2.INTER_NEAREST
+            )
+
         results = self.sam_predictor(
             frame,
             text=labels,
@@ -63,6 +74,12 @@ class ObjectPerception:
             confidence = float(box.conf[0])
             mask = result.masks.data[i]
             mask = mask.cpu().numpy()
+
+            mask = cv2.resize(
+                mask.astype(np.float32),
+                (640, 480),
+                interpolation=cv2.INTER_NEAREST
+            )
 
             # Find objects pixel-wise position
             ys, xs = np.where(mask > 0.5)
@@ -87,6 +104,7 @@ class ObjectPerception:
                 WorldObject(
                     label=label,
                     confidence=confidence,
+                    sam_mask=mask,
                     world_pos=world_pos,
                     image_pos=image_pos,
                     segmented_rgb=segmented_rgb,
@@ -95,7 +113,7 @@ class ObjectPerception:
                 )
             )
 
-            return objects, annotated
+        return objects, annotated
 
             # # Object Association
             # new_data = (label, img_embedding, segmented_rgb, world_pos if slam_dict else None)
