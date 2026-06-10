@@ -23,13 +23,17 @@ class WorldObject:
 
 def create_object(frame, mask, label, depth, pose, confidence):
 
+    if any(x is None for x in (frame, mask, label, depth, pose, confidence)):
+        return None
+
     if hasattr(mask, "cpu"):
         mask = mask.cpu().numpy()  
-    mask = cv2.resize(
-        mask.astype(np.float32),
-        (640, 480),
-        interpolation=cv2.INTER_NEAREST
-    )
+    # mask = cv2.resize(
+    #     mask.astype(np.float32),
+    #     (640, 480),
+    #     interpolation=cv2.INTER_NEAREST
+    # )
+    mask = cv2.resize(mask.astype(np.float32), (depth.shape[1], depth.shape[0]), interpolation=cv2.INTER_NEAREST)
 
     # Find objects pixel-wise position
     ys, xs = np.where(mask > 0.5)

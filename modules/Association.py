@@ -82,6 +82,8 @@ class Association():
 
         best_prob = probabilities[best_idx]
 
+        print(f"BEST PROB: {best_prob}")
+
         if best_prob < self.threshold:
             node_id = f"{new_object.label}_{sum(1 for obj in world_objects if obj.label == new_object.label)}"
 

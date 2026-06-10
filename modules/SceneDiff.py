@@ -154,7 +154,7 @@ class SceneDifferenceDetector:
             print(f"ROTATION:  {self.ROT_WEIGHT * rot_norm:.4f}")
             print("-" * 35)
             print(f"FINAL:     {prob:.4f}")
-        print(f"FINAL SCENE DIFF:     {prob:.4f}")
+        # print(f"FINAL SCENE DIFF:     {prob:.4f}")
 
         return diff
             

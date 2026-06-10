@@ -83,6 +83,10 @@ class TrackObject:
 
         self.counter = 0
 
+        self.association = Association(None, None, threshold=0.75)
+
+
+
         torch.set_grad_enabled(False)
 
     def _prepare_frame(self, frame):
@@ -116,18 +120,29 @@ class TrackObject:
         else:
             raise TypeError("initialize() needs objects")
 
-        frame = self._current_frame(frame)
-        if frame is None:
+        original_frame = self._current_frame(frame)
+        if original_frame is None:
             raise RuntimeError("TrackObject.initialize needs a current rgb frame")
 
-        frame = self._prepare_frame(frame)
+        xmem_frame = self._prepare_frame(original_frame)
 
         self.track_map = {}
         self.track_prev = {}
 
         for track_id, obj in enumerate(objects, start=1):
             self.track_map[track_id] = obj.node_id
-            self.track_prev[track_id] = obj.sam_mask
+
+            if self.slam_frame is not None:
+                self.track_prev[track_id] = create_object(
+                    original_frame,
+                    obj.sam_mask,
+                    obj.node_id,
+                    self.slam_frame.depth,
+                    self.slam_frame.pose,
+                    obj.confidence
+                )
+            else:
+                self.track_prev[track_id] = obj
 
         masks = np.stack([obj.sam_mask.astype(np.float32) for obj in objects])
 
@@ -145,7 +160,7 @@ class TrackObject:
         )
 
         with torch.no_grad():
-            img_torch, _ = image_to_torch(frame, self.device)
+            img_torch, _ = image_to_torch(xmem_frame, self.device)
             self.inference.step(img_torch, masks)
 
         self.initialized = True
@@ -159,27 +174,57 @@ class TrackObject:
             raise RuntimeError("TrackObject.track needs a current rgb frame")
 
         original_frame = frame
-        frame = self._prepare_frame(frame)
+        xmem_frame = self._prepare_frame(original_frame)
 
         with torch.no_grad():
-            img_torch, _ = image_to_torch(frame, self.device)
+            img_torch, _ = image_to_torch(xmem_frame, self.device)
             masks = self.inference.step(img_torch)
 
         object_probs = masks[1:].detach().cpu().numpy()
 
+        updated_objects = []
+
         for i, mask_prob in enumerate(object_probs):
+            track_id = i + 1
+            node_id = self.track_map[track_id]
 
             confidence = mask_prob.max()
 
-            if confidence < 0.7:
+            if self.slam_frame is None:
+                if confidence < 0.7:
+                    object_probs[i] *= 0
+                continue
+
+            cur_object = create_object(
+                original_frame,
+                mask_prob,
+                node_id,
+                self.slam_frame.depth,
+                self.slam_frame.pose,
+                confidence
+            )
+
+            if cur_object is None:
+                continue
+
+            if self.track_prev.get(track_id) is None:
+                self.track_prev[track_id] = cur_object
+                continue
+
+            different, _ = self.association._associate(
+                cur_object,
+                [self.track_prev[track_id]]
+            )
+
+            if confidence < 0.7 or different:
                 object_probs[i] *= 0
+                continue
 
-            track_id = i + 1
 
-            prev_mask = self.track_prev[track_id]
-            node_id = self.track_map[track_id]
+            updated_objects.append(cur_object)
+            self.track_prev[track_id] = cur_object
 
-        if frame.shape[:2] != original_frame.shape[:2]:
+        if xmem_frame.shape[:2] != original_frame.shape[:2]:
             original_size = (original_frame.shape[1], original_frame.shape[0])
             object_probs = self._resize_masks(object_probs, original_size)
 
@@ -190,6 +235,7 @@ class TrackObject:
             "annotated": annotated,
             "masks": object_probs,
             "segmented_rgbs": segmented_rgbs,
+            "objects": updated_objects,
         }
 
     def get_segmented_rgbs(self, frame, object_probs, threshold=0.5):
@@ -208,8 +254,8 @@ class TrackObject:
 
     def visualize(self, frame, object_probs, threshold=0.5, min_prob=0.9):
 
-        print(self.track_map)
-        print(object_probs.shape)
+        # print(self.track_map)
+        # print(object_probs.shape)
 
         annotated = frame.copy()
 
@@ -228,8 +274,15 @@ class TrackObject:
             track_id = object_idx + 1
             node_id = self.track_map[track_id]
 
+            world_obj = self.track_prev.get(track_id)
+            if world_obj is not None and world_obj.world_pos is not None:
+                wx, wy, wz = world_obj.world_pos
+                label = f"{node_id}: ({wx:.2f}, {wy:.2f}, {wz:.2f})"
+            else:
+                label = node_id
+
             labels_to_draw.append(
-                (node_id, int(xs.mean()), int(ys.min()) - 10)
+                (label, int(xs.mean()), int(ys.min()) - 10)
             )
 
             color = PALETTE[object_idx % len(PALETTE)]
@@ -241,15 +294,39 @@ class TrackObject:
                     color[c] * alpha
                 ).astype(np.uint8)
 
-        for node_id, x, y in labels_to_draw:
+        for label, x, y in labels_to_draw:
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.6
+            thickness = 2
+            padding = 4
+            y = max(y, 20)
+            (text_w, text_h), baseline = cv2.getTextSize(
+                label,
+                font,
+                font_scale,
+                thickness
+            )
+
+            x1 = max(x - padding, 0)
+            y1 = max(y - text_h - padding, 0)
+            x2 = min(x + text_w + padding, annotated.shape[1] - 1)
+            y2 = min(y + baseline + padding, annotated.shape[0] - 1)
+
+            cv2.rectangle(
+                annotated,
+                (x1, y1),
+                (x2, y2),
+                (0, 0, 0),
+                -1
+            )
             cv2.putText(
                 annotated,
-                node_id,
+                label,
                 (x, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
+                font,
+                font_scale,
                 (255, 255, 255),
-                2
+                thickness
             )
 
         return annotated
