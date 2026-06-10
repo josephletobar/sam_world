@@ -1,8 +1,7 @@
 from sklearn.metrics.pairwise import cosine_similarity
 import cv2
 import numpy as np
-from modules.ObjectPerception import WorldObject
-
+from utils.create_object import WorldObject
 
 class Association():
 

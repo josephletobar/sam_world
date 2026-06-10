@@ -6,7 +6,8 @@ import cv2
 import numpy as np
 import torch
 from ultralytics.models.sam import SAM3SemanticPredictor
-from modules.ObjectPerception import WorldObject, ObjectPerception
+from utils.create_object import create_object, WorldObject
+from modules.ObjectPerception import ObjectPerception
 from modules.Association import Association
 
 sys.path.append(r"C:\Users\jletobar3\Projects\XMem")
@@ -72,6 +73,7 @@ class TrackObject:
         )
 
         self.track_map = {}
+        self.track_prev = {}
 
         self.counter = 0
 
@@ -90,7 +92,7 @@ class TrackObject:
                 interpolation=cv2.INTER_NEAREST
             )
             for mask in masks
-        ])
+        ])        
 
     # Expects WorldObject Data Class
     def initialize(self, frame, objects: list[WorldObject]):
@@ -100,6 +102,7 @@ class TrackObject:
 
         for track_id, obj in enumerate(objects, start=1):
             self.track_map[track_id] = obj.node_id
+            self.track_prev[track_id] = obj.sam_mask
 
         masks = np.stack([obj.sam_mask.astype(np.float32) for obj in objects])
 
@@ -141,6 +144,11 @@ class TrackObject:
 
             if confidence < 0.7:
                 object_probs[i] *= 0
+
+            track_id = i + 1
+
+            prev_mask = self.track_prev[track_id]
+            node_id = self.track_map[track_id]
 
         if frame.shape[:2] != original_frame.shape[:2]:
             original_size = (original_frame.shape[1], original_frame.shape[0])

@@ -259,9 +259,8 @@ class RobotWorldModel:
 
         # Run VLM and SAM if significant change detected or first frame
         if scene_changed:
-            print("--- VLM RAN ---")
 
-            self.priority_object_detector.prev_yolo_labels = None # Reset it
+            self.priority_object_detector.prev_yolo_labels = None # Reset 
 
             self.sam_labels = self.scene_understanding.get_labels(frame, self.vocabulary)
 
