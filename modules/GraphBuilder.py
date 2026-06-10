@@ -96,8 +96,22 @@ class GraphBuilder:
 
         return final_graph
 
+    def _strip_embeddings(self, data):
+        if isinstance(data, dict):
+            return {
+                key: self._strip_embeddings(value)
+                for key, value in data.items()
+                if key not in {"txt_embedding", "img_embedding"}
+            }
+
+        if isinstance(data, list):
+            return [self._strip_embeddings(value) for value in data]
+
+        return data
+
     def save_graph(self, filename="graph.json"):
         data = json_graph.node_link_data(self._build_topology())
+        data = self._strip_embeddings(data)
         with open(filename, "w") as f:
             json.dump(data, f, indent=2)
 
