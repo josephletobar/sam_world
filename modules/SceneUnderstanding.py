@@ -226,7 +226,8 @@ class OllamaClient:
 
 class SceneUnderstanding:
 
-    def __init__(self, client):
+    def __init__(self, client, slam_frame=None):
+        self.slam_frame = slam_frame
 
         if client == "openai":
             self.client = OpenAIClient()
@@ -235,7 +236,20 @@ class SceneUnderstanding:
         else:
             raise ValueError("Invalid client specified. Use 'openai' or 'ollama'.") 
 
-    def get_labels(self, frame, vocabulary):
+    def get_labels(self, *args, frame=None, vocabulary=None):
+        if len(args) >= 2:
+            frame, vocabulary = args[:2]
+        elif len(args) == 1:
+            vocabulary = args[0]
+
+        if frame is None:
+            if self.slam_frame is None:
+                raise RuntimeError("SceneUnderstanding needs a current rgb frame")
+            frame = self.slam_frame.rgb
+
+        if frame is None:
+            raise RuntimeError("SceneUnderstanding needs a current rgb frame")
+
         # Prepare image for VLM
         downsized_frame = cv2.resize(frame, (960, 540))
         _, buffer = cv2.imencode(".jpg", downsized_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])

@@ -10,8 +10,11 @@ import numpy as np
 
 class SceneDifferenceDetector:
 
-    def __init__(self, threshold=0.6, debug=False):
+    def __init__(self, slam_frame, threshold=0.6, debug=False):
         self.threshold = threshold
+
+        self.slam_frame = slam_frame
+
 
         self.debug = debug
 
@@ -84,7 +87,19 @@ class SceneDifferenceDetector:
 
         return rotation_delta
 
-    def should_reprompt(self, frame, pos):
+    def should_reprompt(self, frame=None):
+        if frame is None:
+            if self.slam_frame is None:
+                raise RuntimeError("SceneDifferenceDetector needs a current rgb frame")
+            frame = self.slam_frame.rgb
+
+        if self.slam_frame is None:
+            raise RuntimeError("SceneDifferenceDetector needs a current pose")
+
+        pos = self.slam_frame.pose
+
+        if frame is None or pos is None:
+            raise RuntimeError("SceneDifferenceDetector needs current rgb and pose")
 
         # First iteration TRUE
         if self.prev_frame is None or self.prev_pos is None:

@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 import traceback
+from dataclasses import dataclass
 
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
@@ -15,6 +16,12 @@ from modules.ObjectTracker import TrackObject
 DISPLAY_W = 1920
 DISPLAY_H = 1080
 
+@dataclass
+class SLAMFrame:
+    rgb: np.ndarray
+    depth: np.ndarray
+    pose: dict
+
 class RobotWorldModel:
 
     def __init__(self, source):
@@ -27,10 +34,22 @@ class RobotWorldModel:
 
         self.STEP_FRAMES = 5
 
-        self.scene_diff_detector = SceneDifferenceDetector()
-        self.scene_understanding = SceneUnderstanding(client="openai")
-        self.priority_object_detector = PriorityObjectDetector(self.DEFAULT_LABELS)
-        self.object_perception = ObjectPerception()
+        self.cur_slam_frame = SLAMFrame(
+            rgb=None,
+            depth=None,
+            pose=None,
+        )
+
+        self.scene_diff_detector = SceneDifferenceDetector(self.cur_slam_frame)
+        self.scene_understanding = SceneUnderstanding(
+            client="openai",
+            slam_frame=self.cur_slam_frame
+        )
+        self.priority_object_detector = PriorityObjectDetector(
+            self.DEFAULT_LABELS,
+            self.cur_slam_frame
+        )
+        self.object_perception = ObjectPerception(self.cur_slam_frame)
         self.graph_builder = GraphBuilder()
         self.association = Association(self.global_objects, self.graph_builder)
 
@@ -156,7 +175,7 @@ class RobotWorldModel:
     def get_next_frame(self):
 
         if self.frame_idx >= len(self.rgb_files):
-            return False, None, None
+            return False
 
         rgb_idx = self.frame_idx
         depth_idx = self.rgb_to_depth[rgb_idx]
@@ -190,15 +209,13 @@ class RobotWorldModel:
 
         pose = self.pose_data[pose_idx]
 
-        slam_dict = {
-            "rgb": rgb_frame,
-            "depth": depth_frame,
-            "pose": pose,
-        }
+        self.cur_slam_frame.rgb = rgb_frame
+        self.cur_slam_frame.depth = depth_frame
+        self.cur_slam_frame.pose = pose
 
         self.frame_idx += 1
 
-        return True, rgb_frame, slam_dict
+        return True
 
     def show_video(self, frame):
 
@@ -213,8 +230,12 @@ class RobotWorldModel:
         annotated = cv2.resize(annotated, (DISPLAY_W, DISPLAY_H))
 
         if self.yolo_boxes is not None:
-            scale_x = DISPLAY_W / frame.shape[1]
-            scale_y = DISPLAY_H / frame.shape[0]
+            yolo_frame = self.cur_slam_frame.rgb
+            if yolo_frame is None:
+                yolo_frame = frame
+
+            scale_x = DISPLAY_W / yolo_frame.shape[1]
+            scale_y = DISPLAY_H / yolo_frame.shape[0]
 
             for box in self.yolo_boxes:
                 x1, y1, x2, y2 = box.xyxy[0].detach().cpu().numpy()
@@ -231,38 +252,39 @@ class RobotWorldModel:
 
     def run(self):
 
-        ret, frame, slam_dict = self.get_next_frame()
+        ret = self.get_next_frame()
+
+        if not ret:
+            return False
+
+        frame = self.cur_slam_frame.rgb
 
         if self.frame_idx != 1 and self.frame_idx % self.STEP_FRAMES != 0:
             return True
-    
-        if not ret:
-            return False
         
         if self.tracker is not None and self.tracker.initialized:
-            self.track_result = self.tracker.track(frame)
+            self.track_result = self.tracker.track()
         else:
             self.track_result = None
 
-        pose = slam_dict["pose"]
-
-        priority_objects = self.priority_object_detector.detect(frame)
+        priority_objects = self.priority_object_detector.detect()
         self.yolo_boxes = self.priority_object_detector.yolo_boxes
-        if len(priority_objects) > 0:
+        priority_changed = len(priority_objects) > 0
+        if priority_changed:
             print("PRIORITY OBJECTS DETECTED:", priority_objects)
             self.vocabulary.update(priority_objects)
-
-            scene_changed = True
+        priority_changed = False  # NOTE: not usng for debugging needs work
 
         # Detect scene changes
-        scene_changed = self.scene_diff_detector.should_reprompt(frame, pose)
+        scene_diff_changed = self.scene_diff_detector.should_reprompt()
+        scene_changed = priority_changed or scene_diff_changed
 
         # Run VLM and SAM if significant change detected or first frame
         if scene_changed:
 
             self.priority_object_detector.prev_yolo_labels = None # Reset 
 
-            self.sam_labels = self.scene_understanding.get_labels(frame, self.vocabulary)
+            self.sam_labels = self.scene_understanding.get_labels(self.vocabulary)
 
             print(self.sam_labels)
             full_labels = (
@@ -275,13 +297,13 @@ class RobotWorldModel:
                 self.show_video(frame)
                 return True
             
-            objects, annotated = self.object_perception.get_objects(frame, full_labels, slam_dict)
+            objects, annotated = self.object_perception.get_objects(full_labels)
             for obj in objects:
                 self.association.update(obj)
 
             if len(objects) > 0:
-                self.tracker = TrackObject()
-                self.tracker.initialize(frame, objects)
+                self.tracker = TrackObject(self.cur_slam_frame)
+                self.tracker.initialize(objects)
 
             self.graph_builder.draw_2d_graph()
 

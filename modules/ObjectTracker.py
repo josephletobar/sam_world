@@ -52,11 +52,17 @@ def get_device():
 class TrackObject:
     def __init__(
         self,
+        slam_frame=None,
         xmem_model_path="models/XMem.pth",
         config=None,
         resize_to=(640, 480),
         device=None,
     ):
+        if isinstance(slam_frame, (str, Path)):
+            xmem_model_path = slam_frame
+            slam_frame = None
+
+        self.slam_frame = slam_frame
         self.device = device or get_device()
         self.config = dict(CONFIG if config is None else config)
         self.resize_to = resize_to
@@ -94,11 +100,30 @@ class TrackObject:
             for mask in masks
         ])        
 
+    def _current_frame(self, frame=None):
+        if frame is not None:
+            return frame
+        if self.slam_frame is not None:
+            return self.slam_frame.rgb
+        return None
+
     # Expects WorldObject Data Class
-    def initialize(self, frame, objects: list[WorldObject]):
+    def initialize(self, *args, frame=None):
+        if len(args) >= 2 and isinstance(args[0], np.ndarray):
+            frame, objects = args[:2]
+        elif len(args) >= 1:
+            objects = args[0]
+        else:
+            raise TypeError("initialize() needs objects")
+
+        frame = self._current_frame(frame)
+        if frame is None:
+            raise RuntimeError("TrackObject.initialize needs a current rgb frame")
+
         frame = self._prepare_frame(frame)
 
         self.track_map = {}
+        self.track_prev = {}
 
         for track_id, obj in enumerate(objects, start=1):
             self.track_map[track_id] = obj.node_id
@@ -125,9 +150,13 @@ class TrackObject:
 
         self.initialized = True
 
-    def track(self, frame):
+    def track(self, frame=None):
         if not self.initialized:
             raise RuntimeError("Call initialize(frame, labels) before track(frame)")
+
+        frame = self._current_frame(frame)
+        if frame is None:
+            raise RuntimeError("TrackObject.track needs a current rgb frame")
 
         original_frame = frame
         frame = self._prepare_frame(frame)

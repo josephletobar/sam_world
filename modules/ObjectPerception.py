@@ -8,7 +8,8 @@ from utils.create_object import create_object
 
 
 class ObjectPerception:
-    def __init__(self):
+    def __init__(self, slam_frame=None):
+        self.slam_frame = slam_frame
 
         overrides = dict(
             conf=0.8,
@@ -22,12 +23,32 @@ class ObjectPerception:
 
         self.first_frame = True
 
-    def get_objects(self, frame, labels, slam_dict):
+    def get_objects(self, *args, frame=None, labels=None, slam_dict=None):
+        if len(args) >= 2:
+            frame, labels = args[:2]
+            if len(args) >= 3:
+                slam_dict = args[2]
+        elif len(args) == 1:
+            labels = args[0]
 
         objects = []
 
-        pose = slam_dict["pose"]
-        depth = slam_dict["depth"]
+        if frame is None:
+            if self.slam_frame is None:
+                raise RuntimeError("ObjectPerception needs a current rgb frame")
+            frame = self.slam_frame.rgb
+
+        if slam_dict is not None:
+            pose = slam_dict["pose"]
+            depth = slam_dict["depth"]
+        else:
+            if self.slam_frame is None:
+                raise RuntimeError("ObjectPerception needs current depth and pose")
+            pose = self.slam_frame.pose
+            depth = self.slam_frame.depth
+
+        if frame is None or depth is None or pose is None:
+            raise RuntimeError("ObjectPerception needs current rgb, depth, and pose")
 
         frame = cv2.resize(frame, (640, 480))
 
@@ -61,7 +82,8 @@ class ObjectPerception:
 
             ret_obj = create_object(frame, mask, label, depth, pose, confidence)
 
-            objects.append(ret_obj)
+            if ret_obj is not None:
+                objects.append(ret_obj)
 
         return objects, annotated
 

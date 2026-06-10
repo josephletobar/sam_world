@@ -1,9 +1,10 @@
 from ultralytics import YOLOWorld
 
 class PriorityObjectDetector:
-    def __init__(self, priority_labels):
+    def __init__(self, priority_labels, slam_frame=None):
         self.model = YOLOWorld("yolov8x-worldv2.pt")
         self.model.set_classes(priority_labels)
+        self.slam_frame = slam_frame
         self.prev_yolo_labels = None
         self.detected_objects = None
         self.yolo_boxes = None
@@ -33,7 +34,14 @@ class PriorityObjectDetector:
             self.prev_yolo_labels = labels
             return False
 
-    def detect(self, frame):
+    def detect(self, frame=None):
+        if frame is None:
+            if self.slam_frame is None:
+                raise RuntimeError("PriorityObjectDetector needs a current rgb frame")
+            frame = self.slam_frame.rgb
+
+        if frame is None:
+            raise RuntimeError("PriorityObjectDetector needs a current rgb frame")
     
         if self._yolo_diff(frame):
             return list(self.detected_objects)
