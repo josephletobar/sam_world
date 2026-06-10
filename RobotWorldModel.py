@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import traceback
 from dataclasses import dataclass
+from utils.load_data import load_data
 
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
@@ -16,6 +17,8 @@ from modules.ObjectTracker import TrackObject
 DISPLAY_W = 1920
 DISPLAY_H = 1080
 
+STEP_FRAMES = 5
+
 @dataclass
 class SLAMFrame:
     rgb: np.ndarray
@@ -25,14 +28,12 @@ class SLAMFrame:
 class RobotWorldModel:
 
     def __init__(self, source):
-        self.load_slam_data(source)
         self.frame_idx = 0        
 
         self.global_objects = []
 
         self.DEFAULT_LABELS = ["person"]
-
-        self.STEP_FRAMES = 5
+        self.vocabulary = set(self.DEFAULT_LABELS)
 
         self.cur_slam_frame = SLAMFrame(
             rgb=None,
@@ -41,14 +42,8 @@ class RobotWorldModel:
         )
 
         self.scene_diff_detector = SceneDifferenceDetector(self.cur_slam_frame)
-        self.scene_understanding = SceneUnderstanding(
-            client="openai",
-            slam_frame=self.cur_slam_frame
-        )
-        self.priority_object_detector = PriorityObjectDetector(
-            self.DEFAULT_LABELS,
-            self.cur_slam_frame
-        )
+        self.scene_understanding = SceneUnderstanding(client="openai", slam_frame=self.cur_slam_frame)
+        self.priority_object_detector = PriorityObjectDetector(self.DEFAULT_LABELS, self.cur_slam_frame)
         self.object_perception = ObjectPerception(self.cur_slam_frame)
         self.graph_builder = GraphBuilder()
         self.association = Association(self.global_objects, self.graph_builder)
@@ -56,121 +51,9 @@ class RobotWorldModel:
         self.tracker = None
         self.track_result = None
 
-        self.vocabulary = set(self.DEFAULT_LABELS)
-
         self.yolo_boxes = None
 
-    def load_slam_data(self, source):
-
-        self.rgb_files = sorted(
-            os.path.join(source, "rgb", f)
-            for f in os.listdir(os.path.join(source, "rgb"))
-        )
-
-        self.depth_files = sorted(
-            os.path.join(source, "depth", f)
-            for f in os.listdir(os.path.join(source, "depth"))
-        )
-
-        if len(self.rgb_files) == 0:
-            raise ValueError("No RGB images found")
-
-        if len(self.depth_files) == 0:
-            raise ValueError("No depth images found")
-
-        gt_path = os.path.join(source, "groundtruth.txt")
-
-        self.pose_data = []
-        with open(gt_path, "r") as f:
-            for line in f:
-                if line.startswith("#") or not line.strip():
-                    continue
-
-                parts = line.strip().split()
-
-                if len(parts) < 8:
-                    continue
-
-                self.pose_data.append({
-                    "timestamp": float(parts[0]),
-                    "tx": float(parts[1]),
-                    "ty": float(parts[2]),
-                    "tz": float(parts[3]),
-                    "qx": float(parts[4]),
-                    "qy": float(parts[5]),
-                    "qz": float(parts[6]),
-                    "qw": float(parts[7]),
-                })
-
-        if len(self.pose_data) == 0:
-            raise ValueError("No poses found")
-
-        # load timestamps
-        rgb_ts_path = os.path.join(source, "rgb.txt")
-        depth_ts_path = os.path.join(source, "depth.txt")
-
-        self.rgb_timestamps = np.loadtxt(rgb_ts_path)
-        self.depth_timestamps = np.loadtxt(depth_ts_path)
-
-        self.pose_timestamps = np.array([
-            pose["timestamp"]
-            for pose in self.pose_data
-        ])
-
-        # precompute alignments
-        self.rgb_to_pose = []
-        self.rgb_to_depth = []
-
-        for rgb_ts in self.rgb_timestamps:
-
-            pose_idx = np.searchsorted(
-                self.pose_timestamps,
-                rgb_ts
-            )
-
-            if pose_idx > 0 and (
-                pose_idx == len(self.pose_timestamps)
-                or abs(self.pose_timestamps[pose_idx - 1] - rgb_ts)
-                < abs(self.pose_timestamps[pose_idx] - rgb_ts)
-            ):
-                pose_idx -= 1
-
-            depth_idx = np.searchsorted(
-                self.depth_timestamps,
-                rgb_ts
-            )
-
-            if depth_idx > 0 and (
-                depth_idx == len(self.depth_timestamps)
-                or abs(self.depth_timestamps[depth_idx - 1] - rgb_ts)
-                < abs(self.depth_timestamps[depth_idx] - rgb_ts)
-            ):
-                depth_idx -= 1
-
-            self.rgb_to_pose.append(pose_idx)
-            self.rgb_to_depth.append(depth_idx)
-
-        print("RGB:", len(self.rgb_files))
-        print("Depth:", len(self.depth_files))
-        print("Poses:", len(self.pose_data))
-        print("RGB->Pose:", len(self.rgb_to_pose))
-        print("RGB->Depth:", len(self.rgb_to_depth))
-
-        print(
-            "First RGB->Pose dt:",
-            abs(
-                self.pose_timestamps[self.rgb_to_pose[0]]
-                - self.rgb_timestamps[0]
-            )
-        )
-
-        print(
-            "Mean RGB->Pose dt:",
-            np.mean([
-                abs(self.pose_timestamps[p] - t)
-                for p, t in zip(self.rgb_to_pose, self.rgb_timestamps)
-            ])
-        )
+        self.rgb_files, self.depth_files, self.rgb_to_pose, self.rgb_to_depth, self.pose_data = load_data(source)
 
     def get_next_frame(self):
 
@@ -259,7 +142,7 @@ class RobotWorldModel:
 
         frame = self.cur_slam_frame.rgb
 
-        if self.frame_idx != 1 and self.frame_idx % self.STEP_FRAMES != 0:
+        if self.frame_idx != 1 and self.frame_idx % STEP_FRAMES != 0:
             return True
         
         if self.tracker is not None and self.tracker.initialized:
