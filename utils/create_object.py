@@ -38,17 +38,29 @@ def create_object(frame, mask, label, depth, pose, confidence):
     # Find objects pixel-wise position
     ys, xs = np.where(mask > 0.5)
 
+    if len(xs) == 0 or len(ys) == 0:
+        return None
+
     object_pose = get_pos(mask, depth, pose)
     if object_pose is None: return
 
     world_pos, image_pos = object_pose
 
+    x1, x2 = xs.min(), xs.max()
+    y1, y2 = ys.min(), ys.max()
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
     segmented_rgb = frame.copy()
     segmented_rgb[mask == 0] = 0
     segmented_rgb = segmented_rgb[
-        ys.min():ys.max(),
-        xs.min():xs.max()
+        y1:y2 + 1,
+        x1:x2 + 1
     ]
+
+    if segmented_rgb.size == 0 or 0 in segmented_rgb.shape[:2]:
+        return None
 
     # embed the object
     img_embedding = embed_image(segmented_rgb)

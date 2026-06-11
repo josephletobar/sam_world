@@ -55,7 +55,7 @@ class TrackObject:
         slam_frame=None,
         xmem_model_path="models/XMem.pth",
         config=None,
-        resize_to=(640, 480),
+        resize_to=None,
         device=None,
     ):
         if isinstance(slam_frame, (str, Path)):

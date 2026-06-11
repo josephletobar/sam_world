@@ -1,16 +1,64 @@
 import os
 import numpy as np
 
+
+def _load_timestamped_files(source, filename, fallback_dir):
+        path = os.path.join(source, filename)
+        timestamps = []
+        files = []
+        has_listed_files = False
+
+        with open(path, "r") as f:
+            for line in f:
+                if line.startswith("#") or not line.strip():
+                    continue
+
+                parts = line.strip().split()
+                if len(parts) < 1:
+                    continue
+
+                timestamps.append(float(parts[0]))
+
+                if len(parts) >= 2:
+                    has_listed_files = True
+                    files.append(os.path.join(source, parts[1]))
+                else:
+                    files.append(None)
+
+        if len(timestamps) == 0:
+            raise ValueError(f"No timestamps found in {path}")
+
+        if not has_listed_files:
+            folder = os.path.join(source, fallback_dir)
+            files = [
+                os.path.join(folder, name)
+                for name in sorted(os.listdir(folder))
+                if not name.startswith("._")
+            ]
+
+            if len(files) < len(timestamps):
+                raise ValueError(
+                    f"{folder} has {len(files)} files but {path} has "
+                    f"{len(timestamps)} timestamps"
+                )
+
+            files = files[:len(timestamps)]
+
+        return files, np.array(timestamps)
+
+
 def load_data(source):
 
-        rgb_files = sorted(
-            os.path.join(source, "rgb", f)
-            for f in os.listdir(os.path.join(source, "rgb"))
+        rgb_files, rgb_timestamps = _load_timestamped_files(
+            source,
+            "rgb.txt",
+            "rgb"
         )
 
-        depth_files = sorted(
-            os.path.join(source, "depth", f)
-            for f in os.listdir(os.path.join(source, "depth"))
+        depth_files, depth_timestamps = _load_timestamped_files(
+            source,
+            "depth.txt",
+            "depth"
         )
 
         if len(rgb_files) == 0:
@@ -45,13 +93,6 @@ def load_data(source):
 
         if len(pose_data) == 0:
             raise ValueError("No poses found")
-
-        # load timestamps
-        rgb_ts_path = os.path.join(source, "rgb.txt")
-        depth_ts_path = os.path.join(source, "depth.txt")
-
-        rgb_timestamps = np.loadtxt(rgb_ts_path)
-        depth_timestamps = np.loadtxt(depth_ts_path)
 
         pose_timestamps = np.array([
             pose["timestamp"]

@@ -50,12 +50,10 @@ class ObjectPerception:
         if frame is None or depth is None or pose is None:
             raise RuntimeError("ObjectPerception needs current rgb, depth, and pose")
 
-        frame = cv2.resize(frame, (640, 480))
-
         if depth.shape[:2] != frame.shape[:2]:
             depth = cv2.resize(
                 depth,
-                (640, 480),
+                (frame.shape[1], frame.shape[0]),
                 interpolation=cv2.INTER_NEAREST
             )
 

@@ -148,13 +148,15 @@ class RobotWorldModel:
         if self.tracker is not None and self.tracker.initialized:
             self.track_result = self.tracker.track()
 
-            for tracked_object in self.track_result["objects"]:
-                node_id = tracked_object.node_id
+            tracked_objects = self.track_result["objects"]
+            if len(tracked_objects) > 0:
+                for tracked_object in tracked_objects:
+                    node_id = tracked_object.node_id
 
-                for i, obj in enumerate(self.global_objects):
-                    if obj.node_id == node_id:
-                        self.global_objects[i] = tracked_object
-                        break
+                    for i, obj in enumerate(self.global_objects):
+                        if obj.node_id == node_id:
+                            self.global_objects[i] = tracked_object
+                            break
 
         else:
             self.track_result = None
