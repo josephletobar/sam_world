@@ -3,3 +3,7 @@ runs
 *.pt
 *.pth
 examples
+examples/**/*.mp4
+examples/**/*.json
+__pycache__/
+*.pyc
