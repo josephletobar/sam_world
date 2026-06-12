@@ -29,6 +29,8 @@ CONFIG = {
     "num_objects": 20,
 }
 
+XMEM_MAX_TRACKING_SIDE = 640
+
 PALETTE = np.array([
     (255, 0, 0),
     (0, 255, 0),
@@ -55,7 +57,7 @@ class TrackObject:
         slam_frame=None,
         xmem_model_path="models/XMem.pth",
         config=None,
-        resize_to=None,
+        resize_to=XMEM_MAX_TRACKING_SIDE,
         device=None,
     ):
         if isinstance(slam_frame, (str, Path)):
@@ -65,7 +67,7 @@ class TrackObject:
         self.slam_frame = slam_frame
         self.device = device or get_device()
         self.config = dict(CONFIG if config is None else config)
-        self.resize_to = resize_to
+        self.resize_to = self._normalize_resize_to(resize_to)
         self.initialized = False
 
         network = XMem(
@@ -83,16 +85,47 @@ class TrackObject:
 
         self.counter = 0
 
-        self.association = Association(None, None, threshold=0.75)
+        self.association = Association(None, None, threshold=0.4)
 
 
 
         torch.set_grad_enabled(False)
 
-    def _prepare_frame(self, frame):
+    def _normalize_resize_to(self, resize_to):
+        if resize_to is None or isinstance(resize_to, tuple):
+            return resize_to
+
+        max_side = int(resize_to)
+        if max_side <= 0:
+            raise ValueError("resize_to must be None, a (width, height) tuple, or a positive max side")
+        return max_side
+
+    def _target_size(self, frame):
         if self.resize_to is None:
+            return None
+
+        if isinstance(self.resize_to, int):
+            height, width = frame.shape[:2]
+            current_max_side = max(width, height)
+            if current_max_side <= self.resize_to:
+                return None
+
+            scale = self.resize_to / current_max_side
+            return (
+                max(1, int(round(width * scale))),
+                max(1, int(round(height * scale))),
+            )
+
+        return self.resize_to
+
+    def _prepare_frame(self, frame):
+        target_size = self._target_size(frame)
+        if target_size is None:
             return frame
-        return cv2.resize(frame, self.resize_to)
+        return cv2.resize(frame, target_size)
+
+    def _mask_size_for_frame(self, frame):
+        return (frame.shape[1], frame.shape[0])
 
     def _resize_masks(self, masks, size):
         return np.stack([
@@ -147,7 +180,7 @@ class TrackObject:
         masks = np.stack([obj.sam_mask.astype(np.float32) for obj in objects])
 
         if self.resize_to is not None:
-            masks = self._resize_masks(masks, self.resize_to)
+            masks = self._resize_masks(masks, self._mask_size_for_frame(xmem_frame))
 
         masks = torch.tensor(
             masks,
@@ -211,7 +244,7 @@ class TrackObject:
                 self.track_prev[track_id] = cur_object
                 continue
 
-            different, _ = self.association._associate(
+            different, _, _ = self.association._associate(
                 cur_object,
                 [self.track_prev[track_id]]
             )

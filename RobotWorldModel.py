@@ -3,7 +3,9 @@ import cv2
 import numpy as np
 import traceback
 from dataclasses import dataclass
+from datetime import datetime
 from utils.load_data import load_data
+from utils.video_recorder import VideoRecorder
 
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
@@ -16,8 +18,10 @@ from modules.ObjectTracker import TrackObject
 
 DISPLAY_W = 1920
 DISPLAY_H = 1080
+SIDE_BY_SIDE_W = 1920
+SIDE_BY_SIDE_H = 1080
 
-STEP_FRAMES = 5
+STEP_FRAMES = 10
 
 @dataclass
 class SLAMFrame:
@@ -34,6 +38,7 @@ class RobotWorldModel:
 
         self.DEFAULT_LABELS = ["person"]
         self.vocabulary = set(self.DEFAULT_LABELS)
+        self.scene_vocab = set()
 
         self.cur_slam_frame = SLAMFrame(
             rgb=None,
@@ -41,19 +46,53 @@ class RobotWorldModel:
             pose=None,
         )
 
-        self.scene_diff_detector = SceneDifferenceDetector(self.cur_slam_frame)
-        self.scene_understanding = SceneUnderstanding(client="openai", slam_frame=self.cur_slam_frame)
+        self.cur_scene = None
+
+        self.timestamp = int(datetime.now().timestamp() * 1000)
+        self.output_dir = f"examples/{self.timestamp}"
+
+        self.scene_diff_detector = SceneDifferenceDetector(self.cur_slam_frame, threshold=0.55)
+        self.scene_understanding = SceneUnderstanding(client="openai", slam_frame=self.cur_slam_frame, vocab=self.vocabulary, scene_vocab=self.scene_vocab)
         self.priority_object_detector = PriorityObjectDetector(self.DEFAULT_LABELS, self.cur_slam_frame)
         self.object_perception = ObjectPerception(self.cur_slam_frame)
-        self.graph_builder = GraphBuilder()
-        self.association = Association(self.global_objects, self.graph_builder)
+        self.scene_recorder = VideoRecorder(f"{self.output_dir}/scene.mp4", fps=20)
+        self.graph_recorder = VideoRecorder(f"{self.output_dir}/graph_2d.mp4", fps=20)
+        self.side_by_side_recorder = VideoRecorder(f"{self.output_dir}/side_by_side.mp4", fps=20)
+        self.graph_builder = GraphBuilder(
+            recorder=self.graph_recorder,
+            graph_path=f"{self.output_dir}/graph.json"
+        )
+        self.association = Association(self.global_objects, self.graph_builder, threshold=0.575)
 
         self.tracker = None
         self.track_result = None
 
         self.yolo_boxes = None
+        self.closed = False
 
         self.rgb_files, self.depth_files, self.rgb_to_pose, self.rgb_to_depth, self.pose_data = load_data(source)
+
+    def _fit_frame(self, frame, width, height):
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        frame_h, frame_w = frame.shape[:2]
+        scale = min(width / frame_w, height / frame_h)
+        resized_w = max(1, int(round(frame_w * scale)))
+        resized_h = max(1, int(round(frame_h * scale)))
+        resized = cv2.resize(frame, (resized_w, resized_h))
+        x = (width - resized_w) // 2
+        y = (height - resized_h) // 2
+        canvas[y:y + resized_h, x:x + resized_w] = resized
+        return canvas
+
+    def _write_side_by_side(self, scene_frame):
+        graph_frame = self.graph_builder.get_2d_graph_frame()
+        panel_w = SIDE_BY_SIDE_W // 2
+
+        scene_panel = self._fit_frame(scene_frame, panel_w, SIDE_BY_SIDE_H)
+        graph_panel = self._fit_frame(graph_frame, SIDE_BY_SIDE_W - panel_w, SIDE_BY_SIDE_H)
+        combined = np.hstack((scene_panel, graph_panel))
+
+        self.side_by_side_recorder.write(combined)
 
     def get_next_frame(self):
 
@@ -82,6 +121,9 @@ class RobotWorldModel:
             raise ValueError(
                 f"Could not read depth frame: {self.depth_files[depth_idx]}"
             )
+
+        if depth_frame.ndim > 2:
+            depth_frame = depth_frame[:, :, 0]
 
         if depth_frame.shape[:2] != rgb_frame.shape[:2]:
             depth_frame = cv2.resize(
@@ -112,6 +154,45 @@ class RobotWorldModel:
 
         annotated = cv2.resize(annotated, (DISPLAY_W, DISPLAY_H))
 
+        if self.cur_scene:
+            scene_text = str(self.cur_scene)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.1
+            thickness = 2
+            padding_x = 14
+            padding_y = 10
+
+            (text_w, text_h), baseline = cv2.getTextSize(
+                scene_text,
+                font,
+                font_scale,
+                thickness
+            )
+
+            text_x = (annotated.shape[1] - text_w) // 2
+            text_y = 42
+            rect_x1 = max(text_x - padding_x, 0)
+            rect_y1 = max(text_y - text_h - padding_y, 0)
+            rect_x2 = min(text_x + text_w + padding_x, annotated.shape[1] - 1)
+            rect_y2 = min(text_y + baseline + padding_y, annotated.shape[0] - 1)
+
+            cv2.rectangle(
+                annotated,
+                (rect_x1, rect_y1),
+                (rect_x2, rect_y2),
+                (0, 0, 0),
+                -1
+            )
+            cv2.putText(
+                annotated,
+                scene_text,
+                (text_x, text_y),
+                font,
+                font_scale,
+                (255, 255, 255),
+                thickness
+            )
+
         if self.yolo_boxes is not None:
             yolo_frame = self.cur_slam_frame.rgb
             if yolo_frame is None:
@@ -131,7 +212,20 @@ class RobotWorldModel:
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
         cv2.imshow("Video", annotated)
+        self.scene_recorder.write(annotated)
+        self.graph_builder.write_2d_graph_frame()
+        self._write_side_by_side(annotated)
         cv2.waitKey(1)
+
+    def close(self):
+        if self.closed:
+            return
+
+        self.scene_recorder.release()
+        self.graph_recorder.release()
+        self.side_by_side_recorder.release()
+        cv2.destroyAllWindows()
+        self.closed = True
 
     def run(self):
 
@@ -139,10 +233,13 @@ class RobotWorldModel:
 
         if not ret:
             return False
+        
+        print(self.vocabulary)
 
         frame = self.cur_slam_frame.rgb
 
         if self.frame_idx != 1 and self.frame_idx % STEP_FRAMES != 0:
+            self.show_video(frame)
             return True
         
         if self.tracker is not None and self.tracker.initialized:
@@ -155,6 +252,8 @@ class RobotWorldModel:
 
                     for i, obj in enumerate(self.global_objects):
                         if obj.node_id == node_id:
+                            tracked_object.first_seen = obj.first_seen
+                            tracked_object.last_seen = self.cur_slam_frame.pose.get("timestamp")
                             self.global_objects[i] = tracked_object
                             break
 
@@ -167,7 +266,6 @@ class RobotWorldModel:
         if priority_changed:
             print("PRIORITY OBJECTS DETECTED:", priority_objects)
             self.vocabulary.update(priority_objects)
-        priority_changed = False  # NOTE: not usng for debugging needs work
 
         # Detect scene changes
         scene_diff_changed = self.scene_diff_detector.should_reprompt()
@@ -178,7 +276,9 @@ class RobotWorldModel:
 
             self.priority_object_detector.prev_yolo_labels = None # Reset 
 
-            self.sam_labels = self.scene_understanding.get_labels(self.vocabulary)
+            self.sam_labels, self.cur_scene = self.scene_understanding.get_labels()
+            if self.cur_scene:
+                self.scene_vocab.add(self.cur_scene)
 
             print(self.sam_labels)
             full_labels = (
@@ -193,7 +293,10 @@ class RobotWorldModel:
             
             objects, annotated = self.object_perception.get_objects(full_labels)
             for obj in objects:
-                self.association.update(obj)
+                self.association.update(
+                    obj,
+                    timestamp=self.cur_slam_frame.pose.get("timestamp")
+                )
 
             if len(objects) > 0:
                 self.tracker = TrackObject(self.cur_slam_frame)
@@ -232,10 +335,12 @@ class RobotWorldModel:
         
 
 if __name__ == "__main__":
+    world = None
     # world = RobotWorldModel(r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg1_xyz (1)\rgbd_dataset_freiburg1_xyz")
     # world = RobotWorldModel(r"C:\Users\jletobar3\Downloads\rgbd_dataset_freiburg2_pioneer_slam\rgbd_dataset_freiburg2_pioneer_slam")
     # world = RobotWorldModel(r"D:\forest_data")
-    world = RobotWorldModel(r"D:\kab3_data")
+    # world = RobotWorldModel(r"D:\kab3_data")
+    world= RobotWorldModel(r"D:\dataset")
 
     try:
         while True:
@@ -252,7 +357,11 @@ if __name__ == "__main__":
         traceback.print_exc()
 
     finally:
+        if world is None:
+            raise SystemExit
 
+        world.close()
+        world.graph_builder.save_graph()
         final_graph = world.graph_builder.draw_3d_graph()
 
         chat = ChatWithGraph(final_graph)

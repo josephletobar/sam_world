@@ -13,7 +13,7 @@ class PriorityObjectDetector:
         
         yolo_objs = self.model.predict(
             frame,
-            conf=0.8,
+            conf=0.75,
             verbose=False
         )
         labels = {

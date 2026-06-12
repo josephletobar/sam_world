@@ -5,16 +5,42 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from sklearn.cluster import DBSCAN
 from networkx.readwrite import json_graph
+from pathlib import Path
 import json
 
 class GraphBuilder:
-    def __init__(self):
+    def __init__(self, recorder=None, graph_path="graph.json"):
         
         self.fig = plt.figure()
         self.ax = self.fig.add_subplot(111, projection="3d")
 
         self.G = nx.Graph()
         self.pos = {}
+        self.recorder = recorder
+        self.graph_path = Path(graph_path)
+        self.last_2d_frame = None
+
+    def _figure_to_bgr(self):
+        fig = plt.gcf()
+        fig.canvas.draw()
+        rgba = np.asarray(fig.canvas.buffer_rgba())
+        rgb = rgba[:, :, :3]
+        return rgb[:, :, ::-1].copy()
+
+    def write_2d_graph_frame(self):
+        if self.recorder is None:
+            return
+
+        self.recorder.write(self.get_2d_graph_frame())
+
+    def get_2d_graph_frame(self):
+        if self.last_2d_frame is None:
+            self.draw_2d_graph()
+
+        return self.last_2d_frame
+
+    def clear_recorder(self):
+        self.recorder = None
 
     # Adds to Graph and updates memories
     def add_object(self, obj, global_objects):
@@ -30,7 +56,9 @@ class GraphBuilder:
             world_z=float(world_z),
             txt_embedding=obj.txt_embedding.tolist(),
             img_embedding=obj.img_embedding,
-            confidence=obj.confidence
+            confidence=obj.confidence,
+            first_seen=obj.first_seen,
+            last_seen=obj.last_seen,
         )
 
         self.pos[obj.node_id] = (
@@ -53,6 +81,26 @@ class GraphBuilder:
                 weight=round(dist, 2)
             )
 
+    def update_object(self, obj):
+        if obj.node_id not in self.G:
+            return
+
+        world_x, world_y, world_z = obj.world_pos
+        self.G.nodes[obj.node_id].update(
+            world_x=float(world_x),
+            world_y=float(world_y),
+            world_z=float(world_z),
+            txt_embedding=obj.txt_embedding.tolist(),
+            img_embedding=obj.img_embedding,
+            confidence=obj.confidence,
+            first_seen=obj.first_seen,
+            last_seen=obj.last_seen,
+        )
+        self.pos[obj.node_id] = (
+            world_x,
+            world_z
+        )
+
     def _cluster(self, final_graph):
         nodes = list(final_graph.nodes())
 
@@ -69,8 +117,8 @@ class GraphBuilder:
             return
 
         labels = DBSCAN(
-            eps=0.4,
-            min_samples=3
+            eps=6,
+            min_samples=2
         ).fit_predict(X)
 
         for node, cluster_id in zip(nodes, labels):
@@ -85,7 +133,7 @@ class GraphBuilder:
         threshold_graph = nx.Graph(
             (u, v, d)
             for u, v, d in self.G.edges(data=True)
-            if d["weight"] < 0.5
+            if d["weight"] < 1
         )
 
         mst = nx.minimum_spanning_tree(self.G, weight="weight")
@@ -109,10 +157,14 @@ class GraphBuilder:
 
         return data
 
-    def save_graph(self, filename="graph.json"):
+    def save_graph(self, filename=None):
         data = json_graph.node_link_data(self._build_topology())
         data = self._strip_embeddings(data)
-        with open(filename, "w") as f:
+
+        graph_path = Path(filename) if filename is not None else self.graph_path
+        graph_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with graph_path.open("w") as f:
             json.dump(data, f, indent=2)
 
     def draw_2d_graph(self):
@@ -147,8 +199,10 @@ class GraphBuilder:
 
         self.save_graph()
 
-        plt.pause(0.1)
         plt.draw()
+        self.last_2d_frame = self._figure_to_bgr()
+
+        plt.pause(0.1)
 
         return final_graph
     

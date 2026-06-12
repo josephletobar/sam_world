@@ -1,5 +1,49 @@
 import os
 import numpy as np
+import re
+from utils.camera_config import configure_camera_intrinsics
+
+ZED_DEPTH_SCALE = 1000.0
+
+
+def _configure_camera_from_source(source):
+        intrinsics_path = os.path.join(source, "camera_intrinsics.txt")
+
+        if not os.path.exists(intrinsics_path):
+            raise FileNotFoundError(f"Missing camera intrinsics file: {intrinsics_path}")
+
+        with open(intrinsics_path, "r") as f:
+            text = f.read()
+
+        match = re.search(
+            r"zed2i_depth_caminfo .*?fx=([^ ]+) fy=([^ ]+) cx=([^ ]+) cy=([^ ]+)",
+            text
+        )
+        if match is None:
+            match = re.search(
+                r"zed2i_right_caminfo .*?fx=([^ ]+) fy=([^ ]+) cx=([^ ]+) cy=([^ ]+)",
+                text
+            )
+
+        if match is None:
+            raise ValueError(f"No usable intrinsics found in {intrinsics_path}")
+
+        fx, fy, cx, cy = [float(value) for value in match.groups()]
+        configure_camera_intrinsics(
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+            depth_scale=ZED_DEPTH_SCALE
+        )
+        print(
+            "Camera intrinsics:",
+            f"fx={fx}",
+            f"fy={fy}",
+            f"cx={cx}",
+            f"cy={cy}"
+        )
+        print(f"Depth scale: {ZED_DEPTH_SCALE}")
 
 
 def _load_timestamped_files(source, filename, fallback_dir):
@@ -48,6 +92,9 @@ def _load_timestamped_files(source, filename, fallback_dir):
 
 
 def load_data(source):
+        source = os.path.abspath(source)
+        print(f"Loading dataset: {source}")
+        _configure_camera_from_source(source)
 
         rgb_files, rgb_timestamps = _load_timestamped_files(
             source,
@@ -66,6 +113,28 @@ def load_data(source):
 
         if len(depth_files) == 0:
             raise ValueError("No depth images found")
+
+        missing_rgb = [
+            path
+            for path in rgb_files[:10] + rgb_files[-10:]
+            if not os.path.exists(path)
+        ]
+        if missing_rgb:
+            raise FileNotFoundError(f"Missing RGB files, first missing: {missing_rgb[0]}")
+
+        missing_depth = [
+            path
+            for path in depth_files[:10] + depth_files[-10:]
+            if not os.path.exists(path)
+        ]
+        if missing_depth:
+            raise FileNotFoundError(f"Missing depth files, first missing: {missing_depth[0]}")
+
+        if not np.all(np.diff(rgb_timestamps) > 0):
+            raise ValueError("RGB timestamps must be strictly increasing")
+
+        if not np.all(np.diff(depth_timestamps) > 0):
+            raise ValueError("Depth timestamps must be strictly increasing")
 
         gt_path = os.path.join(source, "groundtruth.txt")
 
@@ -98,6 +167,9 @@ def load_data(source):
             pose["timestamp"]
             for pose in pose_data
         ])
+
+        if not np.all(np.diff(pose_timestamps) > 0):
+            raise ValueError("Pose timestamps must be strictly increasing")
 
         # precompute alignments
         rgb_to_pose = []
